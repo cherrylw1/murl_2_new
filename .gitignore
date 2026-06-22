@@ -7,3 +7,9 @@ out/
 temp/
 tmp/
 *.tsbuildinfo
+
+# Spike Test Repos & Worktrees
+spike/0.2-opencode/test_repo/
+spike/0.2-opencode/worktree_1/
+spike/0.2-opencode/worktree_2/
+

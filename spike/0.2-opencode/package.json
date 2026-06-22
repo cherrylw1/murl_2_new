@@ -1,0 +1,8 @@
+{
+  "name": "spike-opencode",
+  "private": true,
+  "dependencies": {
+    "@opencode-ai/sdk": "latest",
+    "dotenv": "^16.4.5"
+  }
+}

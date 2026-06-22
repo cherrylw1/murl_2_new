@@ -8,8 +8,10 @@
     "lint": "eslint ."
   },
   "devDependencies": {
-    "typescript": "^5.4.5",
+    "@opencode-ai/sdk": "^1.17.9",
+    "dotenv": "^17.4.2",
     "eslint": "^9.5.0",
+    "typescript": "^5.4.5",
     "vitest": "^1.6.0"
   }
 }
