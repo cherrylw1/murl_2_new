@@ -5,6 +5,6 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc -b"
   }
 }

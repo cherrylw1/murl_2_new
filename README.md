@@ -10,13 +10,13 @@ This is the Murl coding-harness build: a Conductor-style orchestrator for the Op
 
 ## Important Constraint
 > [!IMPORTANT]
-> **Every single UI decision going forward must be graded against [docs/taste.md](file:///c:/Content/murl_2_new/docs/taste.md).**
+> **Every single UI decision going forward must be graded against [docs/taste.md](docs/taste.md).**
 > Any deviation from the tiny palette, the strict typography hierarchy (LED Counter 7 / Geist), grid alignment, or the status-as-light model is a failure.
 
 ## Documentation
-- [taste.md](file:///c:/Content/murl_2_new/docs/taste.md) — Design philosophy and taste rules.
-- [design.md](file:///c:/Content/murl_2_new/docs/design.md) — Exact styling tokens, layouts, fonts, and specs.
-- [glyph-wall.html](file:///c:/Content/murl_2_new/docs/glyph-wall.html) — Interactive prototype of the breathing status dashboard.
+- [taste.md](docs/taste.md) — Design philosophy and taste rules.
+- [design.md](docs/design.md) — Exact styling tokens, layouts, fonts, and specs.
+- [glyph-wall.html](docs/glyph-wall.html) — Interactive prototype of the breathing status dashboard.
 
 ## Packages
 - `@murl/core` — Headless worktree manager and OpenCode adapter.

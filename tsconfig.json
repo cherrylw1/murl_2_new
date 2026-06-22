@@ -1,15 +1,7 @@
 {
-  "compilerOptions": {
-    "target": "es2022",
-    "module": "commonjs",
-    "moduleResolution": "node",
-    "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
-    "strict": true,
-    "skipLibCheck": true,
-    "composite": true,
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true
-  }
+  "files": [],
+  "references": [
+    { "path": "./packages/core" },
+    { "path": "./apps/desktop" }
+  ]
 }

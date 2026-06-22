@@ -4,7 +4,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc -b"
   },
   "dependencies": {
     "@murl/core": "workspace:*"

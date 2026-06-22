@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Murl coding-harness monorepo skeleton",
   "scripts": {
-    "typecheck": "pnpm -r typecheck",
+    "typecheck": "tsc -b",
     "lint": "eslint ."
   },
   "devDependencies": {
