@@ -9,9 +9,9 @@
         "apiKey": "{env:TOGETHER_API_KEY}"
       },
       "models": {
-        "openai/gpt-oss-120b": { "name": "GPT-OSS 120B" }
+        "meta-llama/Llama-3.3-70B-Instruct-Turbo": { "name": "Llama 3.3 70B" }
       }
     }
   },
-  "model": "together/openai/gpt-oss-120b"
+  "model": "together/meta-llama/Llama-3.3-70B-Instruct-Turbo"
 }

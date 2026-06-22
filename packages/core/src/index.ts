@@ -1,3 +1,5 @@
+export * from './worktree-manager';
+
 export function noop(): void {
-  // No-op function placeholder for @murl/core
+  // Dummy function for backwards compatibility with apps/desktop
 }

@@ -5,10 +5,12 @@
   "description": "Murl coding-harness monorepo skeleton",
   "scripts": {
     "typecheck": "tsc -b",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test": "vitest run"
   },
   "devDependencies": {
     "@opencode-ai/sdk": "^1.17.9",
+    "@types/node": "^20.11.0",
     "dotenv": "^17.4.2",
     "eslint": "^9.5.0",
     "typescript": "^5.4.5",
