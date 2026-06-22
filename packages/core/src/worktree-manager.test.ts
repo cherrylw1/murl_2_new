@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { WorktreeManager } from './worktree-manager';
+import { WorktreeManager } from './worktree-manager.js';
 
 const execAsync = promisify(exec);
 
@@ -87,7 +87,7 @@ describe('WorktreeManager', () => {
     const list = await manager.list();
     expect(list.length).toBe(2);
 
-    const taskIds = list.map((w) => w.taskId);
+    const taskIds = list.map((w: any) => w.taskId);
     expect(taskIds).toContain('list-1');
     expect(taskIds).toContain('list-2');
 
@@ -104,7 +104,7 @@ describe('WorktreeManager', () => {
 
     // Verify list sees it
     let list = await manager.list();
-    expect(list.find((w) => w.taskId === 'test-remove')).toBeDefined();
+    expect(list.find((w: any) => w.taskId === 'test-remove')).toBeDefined();
 
     // Remove
     await manager.remove(task.path);
@@ -120,7 +120,7 @@ describe('WorktreeManager', () => {
 
     // Verify list no longer returns it
     list = await manager.list();
-    expect(list.find((w) => w.taskId === 'test-remove')).toBeUndefined();
+    expect(list.find((w: any) => w.taskId === 'test-remove')).toBeUndefined();
   });
 
   it('should prune orphan worktrees and branches', async () => {
@@ -170,6 +170,6 @@ describe('WorktreeManager', () => {
     expect(list.length).toBe(3);
 
     // Clean up
-    await Promise.all(results.map((r) => manager.remove(r.path)));
+    await Promise.all(results.map((r: any) => manager.remove(r.path)));
   });
 });
