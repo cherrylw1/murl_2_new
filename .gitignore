@@ -1,0 +1,9 @@
+node_modules/
+dist/
+out/
+.eslintcache
+*.log
+.DS_Store
+temp/
+tmp/
+*.tsbuildinfo

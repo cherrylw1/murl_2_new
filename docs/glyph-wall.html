@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CONDUCTOR — Glyph Wall Prototype</title>
+  <!-- Load Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Load Google Fonts: DotGothic16 for the machine voice, Inter for UI, JetBrains Mono for code -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DotGothic16&family=Inter:wght@400;500;600&family=JetBrains+Mono&display=swap" rel="stylesheet">
+  
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            ink: '#0A0A0A',
+            well: '#000000',
+            carbon: '#161616',
+            aluminium: '#8A8A8A',
+            chalk: '#FAFAFA',
+            signal: '#D71921',
+          },
+          fontFamily: {
+            dot: ['"DotGothic16"', 'monospace'],
+            sans: ['"Inter"', 'system-ui', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          },
+          borderRadius: {
+            DEFAULT: '6px',
+            well: '8px',
+          },
+          boxShadow: {
+            active: '0 0 24px rgba(250,250,250,0.12)',
+            signal: '0 0 20px rgba(215,25,33,0.30)',
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    :root {
+      --c-panel: rgba(22, 22, 22, 0.90);
+      --c-hairline: rgba(138, 138, 138, 0.18);
+    }
+    
+    body {
+      background-color: #0A0A0A;
+      background-image: radial-gradient(rgba(138, 138, 138, 0.06) 1.5px, transparent 1.5px);
+      background-size: 22px 22px;
+      font-family: 'Inter', sans-serif;
+    }
+
+    .panel {
+      background: var(--c-panel);
+      backdrop-filter: blur(8px);
+      border: 1px solid var(--c-hairline);
+      border-radius: 6px;
+    }
+
+    /* Breathing animation for active status dot */
+    @keyframes breath {
+      0%, 100% { opacity: 0.55; box-shadow: 0 0 8px rgba(250, 250, 250, 0.2); }
+      50% { opacity: 1; box-shadow: 0 0 24px rgba(250, 250, 250, 0.5); }
+    }
+    .status-breath {
+      animation: breath 3s ease-in-out infinite;
+    }
+
+    /* Pulsing animation for needs-attention status dot */
+    @keyframes pulse-signal {
+      0%, 100% { opacity: 0.4; box-shadow: 0 0 8px rgba(215, 25, 33, 0.2); }
+      50% { opacity: 1; box-shadow: 0 0 20px rgba(215, 25, 33, 0.6); }
+    }
+    .status-pulse {
+      animation: pulse-signal 1s ease-in-out infinite;
+    }
+
+    /* Transition classes */
+    .transition-all-custom {
+      transition: all 200ms cubic-bezier(0.2, 0, 0, 1);
+    }
+  </style>
+</head>
+<body class="text-chalk min-h-screen p-6 flex flex-col justify-between select-none">
+
+  <!-- Main Container -->
+  <div class="w-full max-w-6xl mx-auto flex flex-col gap-4 flex-1">
+    
+    <!-- Title Bar -->
+    <div class="flex items-center justify-between py-2 px-4 border border-[rgba(138,138,138,0.12)] bg-[#0A0A0A] rounded-[6px]">
+      <!-- macOS traffic lights mockup -->
+      <div class="flex items-center gap-1.5">
+        <span class="w-3 h-3 rounded-full bg-[#ff5f56] opacity-75"></span>
+        <span class="w-3 h-3 rounded-full bg-[#ffbd2e] opacity-75"></span>
+        <span class="w-3 h-3 rounded-full bg-[#27c93f] opacity-75"></span>
+        <span class="text-xs text-aluminium font-mono ml-4 uppercase tracking-[0.06em]">Conductor</span>
+      </div>
+      
+      <!-- Center Title -->
+      <div class="font-dot text-sm text-chalk flex items-center gap-2">
+        <span>●</span>
+        <span>GLYPH WALL</span>
+        <span class="text-aluminium font-sans text-xs bg-carbon px-2 py-0.5 rounded-[4px]">3 AGENTS ACTIVE</span>
+      </div>
+
+      <!-- Right Chrome Icons -->
+      <div class="flex items-center gap-4 text-aluminium text-sm">
+        <button class="hover:text-chalk transition-colors">ⓘ</button>
+        <button class="hover:text-chalk transition-colors">⚙</button>
+      </div>
+    </div>
+
+    <!-- Workspace Area -->
+    <div class="flex flex-1 gap-4 min-h-[500px]">
+      
+      <!-- Left Rail Sidebar -->
+      <div class="w-48 panel p-4 flex flex-col justify-between">
+        <div class="flex flex-col gap-2">
+          <span class="text-[10px] font-sans font-semibold tracking-wider text-aluminium uppercase mb-2">Navigation</span>
+          
+          <button class="flex items-center gap-2 text-left text-xs font-sans text-chalk bg-carbon/60 border border-[rgba(138,138,138,0.12)] px-3 py-2 rounded-[6px] transition-all-custom w-full">
+            <span class="text-xs">▸</span> Runs
+          </button>
+          
+          <button class="flex items-center gap-2 text-left text-xs font-sans text-aluminium hover:text-chalk hover:bg-carbon/20 px-3 py-2 rounded-[6px] transition-all-custom w-full">
+            <span class="text-xs opacity-50">○</span> Recipes
+          </button>
+          
+          <button class="flex items-center gap-2 text-left text-xs font-sans text-aluminium hover:text-chalk hover:bg-carbon/20 px-3 py-2 rounded-[6px] transition-all-custom w-full">
+            <span class="text-xs opacity-50">○</span> Schedule
+          </button>
+
+          <button class="flex items-center gap-2 text-left text-xs font-sans text-aluminium hover:text-chalk hover:bg-carbon/20 px-3 py-2 rounded-[6px] transition-all-custom w-full">
+            <span class="text-xs opacity-50">○</span> Library
+          </button>
+        </div>
+
+        <div class="flex flex-col gap-2 pt-4 border-t border-[rgba(138,138,138,0.12)]">
+          <button class="flex items-center gap-2 text-left text-xs font-sans text-aluminium hover:text-chalk hover:bg-carbon/20 px-3 py-2 rounded-[6px] transition-all-custom w-full">
+            ⚙ Settings
+          </button>
+        </div>
+      </div>
+
+      <!-- Right Main Content Panel -->
+      <div class="flex-1 flex flex-col gap-4">
+        
+        <!-- Glyph Wall Dashboard -->
+        <div class="panel p-4 flex-1 flex flex-col gap-4">
+          <div class="flex justify-between items-center pb-2 border-b border-[rgba(138,138,138,0.12)]">
+            <span class="text-xs font-sans font-semibold tracking-wider text-aluminium uppercase">The Glyph Wall (Pulse Statuses)</span>
+            <span class="text-[10px] font-sans text-aluminium">Click status dot to cycle state · Click cell for details</span>
+          </div>
+
+          <!-- Glyph Cells Grid -->
+          <div class="grid grid-cols-4 gap-4 flex-1">
+            <!-- Cell A1 (Active) -->
+            <div id="cell-a1" onclick="selectAgent('a1')" class="panel bg-carbon/50 hover:bg-carbon border border-[rgba(138,138,138,0.12)] p-4 flex flex-col justify-between cursor-pointer transition-all-custom shadow-active">
+              <div class="flex justify-between items-start">
+                <div class="flex items-center gap-2">
+                  <span id="dot-a1" onclick="cycleState(event, 'a1')" class="w-2 h-2 rounded-full bg-chalk status-breath shadow-active cursor-pointer"></span>
+                  <span class="font-dot text-xs tracking-wider">A1</span>
+                </div>
+                <span class="text-[9px] font-mono bg-carbon px-1.5 py-0.5 rounded text-aluminium">ACTIVE</span>
+              </div>
+              
+              <div class="my-4">
+                <div class="text-[10px] font-sans text-aluminium uppercase tracking-wider mb-1">Current Action</div>
+                <div class="font-mono text-xs text-chalk truncate">▸ click "Search results"</div>
+              </div>
+
+              <div class="flex justify-between text-[10px] font-dot text-aluminium border-t border-[rgba(138,138,138,0.06)] pt-2">
+                <span>turns 12/50</span>
+                <span>$0.04</span>
+              </div>
+            </div>
+
+            <!-- Cell A2 (Idle) -->
+            <div id="cell-a2" onclick="selectAgent('a2')" class="panel bg-carbon/20 hover:bg-carbon border border-[rgba(138,138,138,0.12)] p-4 flex flex-col justify-between cursor-pointer transition-all-custom">
+              <div class="flex justify-between items-start">
+                <div class="flex items-center gap-2">
+                  <span id="dot-a2" onclick="cycleState(event, 'a2')" class="w-2 h-2 rounded-full bg-aluminium cursor-pointer"></span>
+                  <span class="font-dot text-xs tracking-wider">A2</span>
+                </div>
+                <span class="text-[9px] font-mono bg-carbon px-1.5 py-0.5 rounded text-aluminium">IDLE</span>
+              </div>
+
+              <div class="my-4">
+                <div class="text-[10px] font-sans text-aluminium uppercase tracking-wider mb-1">Current Action</div>
+                <div class="font-mono text-xs text-aluminium truncate">idle - waiting for inputs</div>
+              </div>
+
+              <div class="flex justify-between text-[10px] font-dot text-aluminium border-t border-[rgba(138,138,138,0.06)] pt-2">
+                <span>turns 45/50</span>
+                <span>$0.12</span>
+              </div>
+            </div>
+
+            <!-- Cell A3 (Needs Attention) -->
+            <div id="cell-a3" onclick="selectAgent('a3')" class="panel bg-carbon/20 hover:bg-carbon border border-[rgba(138,138,138,0.12)] p-4 flex flex-col justify-between cursor-pointer transition-all-custom">
+              <div class="flex justify-between items-start">
+                <div class="flex items-center gap-2">
+                  <span id="dot-a3" onclick="cycleState(event, 'a3')" class="w-2 h-2 rounded-full bg-signal status-pulse shadow-signal cursor-pointer"></span>
+                  <span class="font-dot text-xs tracking-wider text-signal">A3</span>
+                </div>
+                <span class="text-[9px] font-mono bg-carbon px-1.5 py-0.5 rounded text-signal">⚠ ATTN</span>
+              </div>
+
+              <div class="my-4">
+                <div class="text-[10px] font-sans text-aluminium uppercase tracking-wider mb-1">Current Action</div>
+                <div class="font-mono text-xs text-signal truncate">⚠ CAPTCHA roadblock</div>
+              </div>
+
+              <div class="flex justify-between text-[10px] font-dot text-aluminium border-t border-[rgba(138,138,138,0.06)] pt-2">
+                <span>turns 3/50</span>
+                <span>$0.01</span>
+              </div>
+            </div>
+
+            <!-- New Agent Cell (Trigger/Button) -->
+            <div class="panel border-dashed border-[rgba(138,138,138,0.24)] hover:bg-carbon/20 flex flex-col justify-center items-center cursor-pointer transition-all-custom">
+              <span class="text-2xl font-light text-aluminium hover:text-chalk mb-1">＋</span>
+              <span class="text-[10px] font-sans text-aluminium uppercase tracking-[0.06em]">Add Agent</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Detail Panel (Shows Selected Agent Info) -->
+        <div class="panel p-4 flex flex-col gap-3 min-h-[220px]">
+          <div class="flex justify-between items-center pb-2 border-b border-[rgba(138,138,138,0.12)]">
+            <span id="detail-title" class="text-xs font-sans font-semibold tracking-wider text-chalk uppercase">DETAIL · Agent A1</span>
+            <span class="text-[10px] font-dot text-chalk">$0.04 TOTAL</span>
+          </div>
+
+          <div class="flex gap-4 flex-1">
+            <!-- Simulated Live Browser Well -->
+            <div class="flex-1 bg-well border border-[rgba(138,138,138,0.12)] rounded-[8px] p-2 flex flex-col justify-between">
+              <div class="flex items-center justify-between border-b border-[rgba(138,138,138,0.06)] pb-1.5 mb-2">
+                <span id="browser-url" class="text-[10px] font-mono text-aluminium truncate">https://www.google.com/search?q=open+code+agent</span>
+                <span class="w-1.5 h-1.5 rounded-full bg-chalk status-breath"></span>
+              </div>
+              <div class="flex-1 flex items-center justify-center bg-carbon/40 rounded-[4px] relative overflow-hidden">
+                <!-- Dot Grid under frosted glass panel -->
+                <div class="absolute inset-0 bg-dotgrid opacity-10"></div>
+                <span id="browser-status" class="text-xs font-mono text-aluminium z-10">[Browser viewport render simulation]</span>
+              </div>
+            </div>
+
+            <!-- Action Stream (Mono data) -->
+            <div class="w-80 border border-[rgba(138,138,138,0.12)] rounded-[6px] p-3 flex flex-col gap-2 bg-carbon/20 font-mono text-[11px] overflow-y-auto">
+              <div class="text-[10px] font-sans text-aluminium uppercase tracking-wider pb-1 border-b border-[rgba(138,138,138,0.06)]">Action Stream</div>
+              <div id="action-stream-list" class="flex flex-col gap-1.5">
+                <div class="text-aluminium">▸ thought: searching for OpenCode CLI tool...</div>
+                <div class="text-chalk">▸ navigate: google.com</div>
+                <div class="text-chalk">▸ type: "opencode-ai cli github"</div>
+                <div class="text-chalk font-semibold">▸ click: "Search results"</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Playback Scrubber Deck -->
+          <div class="flex items-center justify-between mt-2 pt-2 border-t border-[rgba(138,138,138,0.12)]">
+            <span class="text-[10px] font-mono text-aluminium">PLAYBACK</span>
+            <div class="flex items-center gap-1.5">
+              <span class="w-1.5 h-1.5 rounded-full bg-chalk cursor-pointer hover:scale-125 transition-transform"></span>
+              <span class="w-1.5 h-1.5 rounded-full bg-chalk cursor-pointer hover:scale-125 transition-transform"></span>
+              <span class="w-1.5 h-1.5 rounded-full bg-chalk cursor-pointer hover:scale-125 transition-transform"></span>
+              <span class="w-1.5 h-1.5 rounded-full bg-chalk cursor-pointer hover:scale-125 transition-transform"></span>
+              <span class="w-1.5 h-1.5 rounded-full bg-aluminium/40 cursor-pointer hover:scale-125 transition-transform"></span>
+              <span class="w-1.5 h-1.5 rounded-full bg-aluminium/40 cursor-pointer hover:scale-125 transition-transform"></span>
+              <span class="w-1.5 h-1.5 rounded-full bg-aluminium/40 cursor-pointer hover:scale-125 transition-transform"></span>
+            </div>
+            <button class="text-[10px] font-sans text-chalk bg-carbon border border-[rgba(138,138,138,0.12)] px-2 py-0.5 rounded hover:text-chalk transition-all">Resume</button>
+          </div>
+
+        </div>
+
+      </div>
+
+    </div>
+
+  </div>
+
+  <!-- Footer self critique guidelines checklist -->
+  <div class="w-full max-w-6xl mx-auto mt-4 text-[10px] font-sans text-aluminium flex justify-between items-center py-2 border-t border-[rgba(138,138,138,0.12)]">
+    <span>CONSTRAINTS: Monochrome canvas, one signal color, snap to grid, visual hierarchy</span>
+    <span>Aesthetics grade: <span class="text-chalk">PASS</span></span>
+  </div>
+
+  <script>
+    const agentsData = {
+      a1: {
+        title: "Agent A1",
+        url: "https://www.google.com/search?q=open+code+agent",
+        browserStatus: "Google Search results showing OpenCode CLI agent...",
+        actions: [
+          '<div class="text-aluminium">▸ thought: searching for OpenCode CLI tool...</div>',
+          '<div class="text-chalk">▸ navigate: google.com</div>',
+          '<div class="text-chalk">▸ type: "opencode-ai cli github"</div>',
+          '<div class="text-chalk font-semibold">▸ click: "Search results"</div>'
+        ],
+        cost: "$0.04"
+      },
+      a2: {
+        title: "Agent A2",
+        url: "about:blank",
+        browserStatus: "[Idle - Waiting for next run target]",
+        actions: [
+          '<div class="text-aluminium">▸ thought: system is in standby...</div>',
+          '<div class="text-aluminium">▸ status: waiting for goal request</div>'
+        ],
+        cost: "$0.12"
+      },
+      a3: {
+        title: "Agent A3",
+        url: "https://github.com/login",
+        browserStatus: "[Blocked: CAPTCHA / 2FA login required]",
+        actions: [
+          '<div class="text-aluminium">▸ thought: authenticating...</div>',
+          '<div class="text-chalk">▸ navigate: github.com/login</div>',
+          '<div class="text-signal font-semibold">⚠ status: CAPTCHA prompt, human intervention required</div>'
+        ],
+        cost: "$0.01"
+      }
+    };
+
+    function selectAgent(id) {
+      // Highlight selected cell border
+      document.querySelectorAll('.grid > div').forEach(el => {
+        el.classList.remove('border-chalk');
+      });
+      document.getElementById('cell-' + id).classList.add('border-chalk');
+
+      // Populate detail panel
+      const agent = agentsData[id];
+      document.getElementById('detail-title').innerText = 'DETAIL · ' + agent.title;
+      document.getElementById('browser-url').innerText = agent.url;
+      document.getElementById('browser-status').innerText = agent.browserStatus;
+      document.getElementById('action-stream-list').innerHTML = agent.actions.join('');
+    }
+
+    // Initialize with A1 selected
+    selectAgent('a1');
+
+    // Cycle state logic
+    function cycleState(event, id) {
+      event.stopPropagation(); // Avoid triggering cell click
+      const dot = document.getElementById('dot-' + id);
+      
+      if (dot.classList.contains('status-breath')) {
+        // Switch to Idle
+        dot.classList.remove('status-breath', 'bg-chalk', 'shadow-active');
+        dot.classList.add('bg-aluminium');
+        dot.style.boxShadow = 'none';
+        agentsData[id].actions.push('<div class="text-aluminium">▸ status changed: idle</div>');
+      } else if (dot.classList.contains('bg-aluminium')) {
+        // Switch to Needs Attention
+        dot.classList.remove('bg-aluminium');
+        dot.classList.add('status-pulse', 'bg-signal', 'shadow-signal');
+        agentsData[id].actions.push('<div class="text-signal font-semibold">▸ status changed: attention required</div>');
+      } else {
+        // Switch to Active
+        dot.classList.remove('status-pulse', 'bg-signal', 'shadow-signal');
+        dot.classList.add('status-breath', 'bg-chalk', 'shadow-active');
+        agentsData[id].actions.push('<div class="text-chalk">▸ status changed: active</div>');
+      }
+      
+      // Refresh detail pane if selected
+      selectAgent(id);
+    }
+  </script>
+</body>
+</html>
