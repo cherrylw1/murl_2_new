@@ -14,12 +14,14 @@ import {
   addRecentRepo,
   getRecentRepos
 } from './settings.js';
+import { TaskRunner } from './task-runner.js';
 
 const execAsync = promisify(exec);
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
+let taskRunner: TaskRunner | null = null;
 
 function createDefaultMenu(): void {
   Menu.setApplicationMenu(null);
@@ -244,8 +246,34 @@ ipcMain.handle('murl:testConnection', async (_event, provider: string, model: st
   }
 });
 
+ipcMain.handle('murl:launchTask', async (_event, repoPath: string, prompt: string, model: string) => {
+  if (!taskRunner) throw new Error('TaskRunner not initialized.');
+  if (!mainWindow) throw new Error('Main window not available.');
+  return taskRunner.launch(repoPath, prompt, model, mainWindow.webContents);
+});
+
+ipcMain.handle('murl:cancelTask', async (_event, taskId: string) => {
+  if (!taskRunner) throw new Error('TaskRunner not initialized.');
+  await taskRunner.cancel(taskId);
+});
+
+ipcMain.handle('murl:getTaskHistory', async () => {
+  if (!taskRunner) return [];
+  return taskRunner.getHistory();
+});
+
+ipcMain.handle('murl:getTaskRecord', async (_event, taskId: string) => {
+  if (!taskRunner) return null;
+  return taskRunner.getRecord(taskId);
+});
+
 app.whenReady().then(() => {
   loadAndSetApiKey();
+
+  // Create shared TaskRunner backed by a persistent SQLite DB in userData
+  const dbPath = join(app.getPath('userData'), 'murl-tasks.db');
+  taskRunner = new TaskRunner(dbPath);
+
   createDefaultMenu();
   createTray();
   createWindow();

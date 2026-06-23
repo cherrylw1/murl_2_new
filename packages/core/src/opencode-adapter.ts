@@ -119,7 +119,8 @@ export class OpenCodeAdapter {
       model?: string;
       timeoutMs?: number;
     },
-    onEvent?: (event: MurlEvent) => void
+    onEvent?: (event: MurlEvent) => void,
+    externalSignal?: AbortSignal
   ): Promise<{
     events: MurlEvent[];
     diff: string;
@@ -177,6 +178,7 @@ export class OpenCodeAdapter {
 
     let isDone = false;
     let errorMsg: string | undefined;
+    let wasCancelledExternally = false;
 
     // 3. Subscribe to the SSE event stream
     const sseResult = await this.client.event.subscribe({
@@ -198,6 +200,19 @@ export class OpenCodeAdapter {
         // Ignore cleanup errors
       }
     };
+
+    // Wire external cancellation signal to the internal cleanup path
+    if (externalSignal) {
+      if (externalSignal.aborted) {
+        wasCancelledExternally = true;
+        cleanup();
+      } else {
+        externalSignal.addEventListener('abort', () => {
+          wasCancelledExternally = true;
+          cleanup();
+        }, { once: true });
+      }
+    }
 
     // 4. Consume the stream asynchronously in the background
     const consumePromise = (async () => {
@@ -314,6 +329,10 @@ export class OpenCodeAdapter {
     cleanup();
 
     // 8. Verify task outcomes
+    if (wasCancelledExternally) {
+      emit({ type: 'status', status: 'failed', error: 'Cancelled' });
+      throw new Error('Task was cancelled.');
+    }
     if (errorMsg) {
       emit({ type: 'status', status: 'failed', error: errorMsg });
       throw new Error(`OpenCode task failed: ${errorMsg}`);
