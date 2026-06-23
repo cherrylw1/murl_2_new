@@ -38,7 +38,7 @@ export default function App(): React.JSX.Element {
         
         {/* System Title */}
         <div className="text-label text-aluminium select-none">
-          CONDUCTOR SHELL · PHASE 1.2
+          MURL · CODING HARNESS
         </div>
 
         {/* Status Light System */}
@@ -213,35 +213,10 @@ export default function App(): React.JSX.Element {
                   <div className="text-label text-aluminium mb-1">CURRENT AREA</div>
                   <h2 className="text-title text-chalk mb-6">Recent Runs</h2>
                   
-                  <div className="flex flex-col gap-3">
-                    <div className="flex justify-between items-center p-4 bg-carbon/30 rounded border border-aluminium/10">
-                      <div className="flex items-center gap-4">
-                        {/* Task identifier using dot font in micro size */}
-                        <span className="text-micro-dot font-dot tracking-wider text-aluminium bg-carbon px-2 py-1 rounded">T-0043</span>
-                        <div>
-                          <div className="text-body font-semibold text-chalk">Verify task-store queries</div>
-                          <div className="text-data text-aluminium text-xs mt-0.5">Model: together/Llama-3.3-70B</div>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-micro-dot font-dot text-chalk">$0.04</div>
-                        <div className="text-data text-aluminium text-xs mt-1">COMPLETED</div>
-                      </div>
-                    </div>
-
-                    <div className="flex justify-between items-center p-4 bg-carbon/30 rounded border border-aluminium/10">
-                      <div className="flex items-center gap-4">
-                        <span className="text-micro-dot font-dot tracking-wider text-aluminium bg-carbon px-2 py-1 rounded">T-0042</span>
-                        <div>
-                          <div className="text-body font-semibold text-chalk">Fix SSE generator deadlock</div>
-                          <div className="text-data text-aluminium text-xs mt-0.5">Model: together/Llama-3.3-70B</div>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-micro-dot font-dot text-chalk">$0.11</div>
-                        <div className="text-data text-aluminium text-xs mt-1">COMPLETED</div>
-                      </div>
-                    </div>
+                  <div className="flex flex-col items-center justify-center border border-dashed border-aluminium/10 rounded-lg py-16 px-4 bg-carbon/20">
+                    <p className="text-data text-aluminium text-center max-w-sm">
+                      No run history found. Run a task to see history and cost logs.
+                    </p>
                   </div>
                 </div>
 

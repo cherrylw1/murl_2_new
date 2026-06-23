@@ -1,6 +1,6 @@
 # Murl — Coding Harness
 
-This is the Murl coding-harness build: a Conductor-style orchestrator for the OpenCode agent across parallel git worktrees, built in the **Nothing** design language.
+This is the Murl coding-harness build: a custom orchestrator for the OpenCode agent across parallel git worktrees, built in the **Nothing** design language.
 
 ## Architecture & Principles
 - **Core Loop:** Orchestrates headless OpenCode execution in isolated git worktrees.
