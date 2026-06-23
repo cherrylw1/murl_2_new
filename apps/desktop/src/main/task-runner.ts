@@ -154,16 +154,17 @@ export class TaskRunner {
       return execAsync(cmd, { cwd: baseRepoPath });
     };
 
-    let didStash = false;
     let originalHead = '';
     let isDetached = false;
 
     try {
-      // 1. Check if original repo is dirty. If so, stash changes to avoid merge blocking
+      // 1. Check if original repo is dirty. If so, refuse to merge
       const { stdout: statusOut } = await execInRepo('git status --porcelain');
       if (statusOut.trim()) {
-        await execInRepo('git stash -u');
-        didStash = true;
+        return {
+          success: false,
+          message: 'The base repository has uncommitted changes. Please commit or stash your changes in the base repository first before keeping this task.',
+        };
       }
 
       // 2. Remember original HEAD
@@ -188,9 +189,6 @@ export class TaskRunner {
         await execInRepo('git merge --abort').catch(() => {});
         // Switch back to original branch/commit
         await execInRepo(`git checkout "${originalHead}"`);
-        if (didStash) {
-          await execInRepo('git stash pop').catch(() => {});
-        }
         return {
           success: false,
           message: `Merge conflict or failure: ${mergeErr.message || String(mergeErr)}`,
@@ -199,9 +197,6 @@ export class TaskRunner {
 
       // Merge succeeded! Restore original checked-out HEAD
       await execInRepo(`git checkout "${originalHead}"`);
-      if (didStash) {
-        await execInRepo('git stash pop').catch(() => {});
-      }
 
       // Clean up the worktree and local task branch
       const worktreeManager = new WorktreeManager(baseRepoPath, path.dirname(worktreePath));
