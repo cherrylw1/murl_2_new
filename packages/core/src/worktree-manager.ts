@@ -120,7 +120,7 @@ export class WorktreeManager {
   async remove(worktreePath: string): Promise<void> {
     const resolvedPath = path.resolve(worktreePath);
     const list = await this.list();
-    const found = list.find((w) => path.resolve(w.path) === resolvedPath);
+    const found = list.find((w) => path.resolve(w.path).toLowerCase() === resolvedPath.toLowerCase());
 
     let branchName = found?.branch;
     if (!branchName) {
