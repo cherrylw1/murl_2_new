@@ -117,6 +117,7 @@ export class OpenCodeAdapter {
     modelConfig?: {
       provider?: string;
       model?: string;
+      timeoutMs?: number;
     },
     onEvent?: (event: MurlEvent) => void
   ): Promise<{
@@ -128,6 +129,7 @@ export class OpenCodeAdapter {
       throw new Error('OpenCode client is not initialized.');
     }
 
+    const controller = new AbortController();
     const model = modelConfig?.model || 'meta-llama/Llama-3.3-70B-Instruct-Turbo';
     const resolvedWorktreePath = path.resolve(worktreePath);
 
@@ -179,10 +181,23 @@ export class OpenCodeAdapter {
     // 3. Subscribe to the SSE event stream
     const sseResult = await this.client.event.subscribe({
       query: { directory: resolvedWorktreePath.replace(/\\/g, '/') },
+      signal: controller.signal,
       onSseError: (err: any) => {
         console.error('SSE Stream Error:', err);
       },
-    });
+    } as any);
+
+    // Helper to abort signal and close stream iterator (safely supports mock stream return)
+    const cleanup = () => {
+      try {
+        controller.abort();
+        if (sseResult.stream && typeof sseResult.stream.return === 'function') {
+          sseResult.stream.return(undefined).catch(() => {});
+        }
+      } catch {
+        // Ignore cleanup errors
+      }
+    };
 
     // 4. Consume the stream asynchronously in the background
     const consumePromise = (async () => {
@@ -249,8 +264,10 @@ export class OpenCodeAdapter {
           }
         }
       } catch (err: any) {
-        console.error('SSE Generator Error:', err);
-        errorMsg = err.message || String(err);
+        if (err.name !== 'AbortError') {
+          console.error('SSE Generator Error:', err);
+          errorMsg = err.message || String(err);
+        }
         isDone = true;
       }
     })();
@@ -268,19 +285,18 @@ export class OpenCodeAdapter {
     } catch (err: any) {
       isDone = true;
       errorMsg = err.message || String(err);
-      try {
-        if (sseResult.stream && typeof sseResult.stream.return === 'function') {
-          await sseResult.stream.return(undefined);
-        }
-      } catch {
-        // Ignore closing error
-      }
+      cleanup();
     }
 
     // 6. Wait for the task execution to conclude (or time out)
-    const timeoutMs = 5 * 60 * 1000;
+    const timeoutMs = modelConfig?.timeoutMs || 5 * 60 * 1000;
+    let timeoutId: NodeJS.Timeout | null = null;
+
     const timeoutPromise = new Promise<void>((_, reject) => {
-      setTimeout(() => reject(new Error('Task execution timed out after 5 minutes.')), timeoutMs);
+      timeoutId = setTimeout(() => {
+        cleanup();
+        reject(new Error(`Task execution timed out after ${timeoutMs}ms.`));
+      }, timeoutMs);
     });
 
     try {
@@ -288,16 +304,14 @@ export class OpenCodeAdapter {
     } catch (err: any) {
       isDone = true;
       errorMsg = err.message || String(err);
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
     }
 
     // 7. Clean up SSE subscription
-    try {
-      if (sseResult.stream && typeof sseResult.stream.return === 'function') {
-        await sseResult.stream.return(undefined);
-      }
-    } catch {
-      // Ignore SSE closing issues
-    }
+    cleanup();
 
     // 8. Verify task outcomes
     if (errorMsg) {
