@@ -1,7 +1,7 @@
 {
   "name": "@murl/desktop",
   "version": "1.0.0",
-  "main": "out/main/index.mjs",
+  "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
@@ -16,9 +16,10 @@
   "devDependencies": {
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.2",
+    "@vitejs/plugin-react": "^4.3.4",
     "electron": "^35.7.5",
     "electron-vite": "^5.0.0",
-    "vite": "^8.0.16"
+    "vite": "^5.4.15"
   }
 }
+
