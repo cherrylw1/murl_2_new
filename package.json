@@ -10,7 +10,7 @@
   },
   "devDependencies": {
     "@opencode-ai/sdk": "^1.17.9",
-    "@types/node": "^20.11.0",
+    "@types/node": "^22.20.0",
     "dotenv": "^17.4.2",
     "eslint": "^9.5.0",
     "typescript": "^5.4.5",
