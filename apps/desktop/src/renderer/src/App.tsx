@@ -236,7 +236,7 @@ export default function App(): React.JSX.Element {
       setLiveEvents([]);
       setTaskDiff('');
       setTaskError('');
-      const taskId = await window.murl.launchTask(activeRepo.path, taskDescription, taskModel);
+      const taskId = await window.murl.launchTask(activeRepo.path, taskDescription, taskModel, taskBranch);
       setActiveTaskId(taskId);
       setTaskRunState('running');
     } catch (err: unknown) {
@@ -649,6 +649,15 @@ export default function App(): React.JSX.Element {
                                 }`}>
                                   {t.status.toUpperCase()}
                                 </span>
+                                {t.outcome && (
+                                  <span className={`text-label text-[9px] px-1.5 py-0.5 rounded border font-mono select-none ${
+                                    t.outcome === 'kept'
+                                      ? 'border-aluminium/20 text-chalk bg-carbon/50 shadow-active'
+                                      : 'border-transparent text-aluminium/65'
+                                  }`}>
+                                    {t.outcome.toUpperCase()}
+                                  </span>
+                                )}
                               </div>
                               <span className="text-data text-aluminium/60 text-xs">
                                 {new Date(t.createdAt).toLocaleString()}

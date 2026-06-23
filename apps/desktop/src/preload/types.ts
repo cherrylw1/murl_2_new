@@ -55,10 +55,11 @@ export interface PersistedTask {
   taskId: string;
   worktreePath: string;
   branch: string;
+  baseBranch?: string;
+  repoPath?: string;
   prompt: string;
   model: string;
   provider: string;
-  /** 'running' | 'completed' | 'failed' | 'cancelled' */
   status: string;
   createdAt: number;
   completedAt: number | null;
@@ -123,10 +124,12 @@ export interface MurlApi {
   getRepoBranch(path: string): Promise<string>;
 
   // Task execution
-  launchTask(repoPath: string, prompt: string, model: string): Promise<string>;
+  launchTask(repoPath: string, prompt: string, model: string, baseBranch?: string): Promise<string>;
   cancelTask(taskId: string): Promise<void>;
   getTaskHistory(): Promise<PersistedTask[]>;
   getTaskRecord(taskId: string): Promise<TaskRecord | null>;
+  keepTask(taskId: string): Promise<{ success: boolean; message?: string }>;
+  discardTask(taskId: string): Promise<{ success: boolean; message?: string }>;
 
   // Push listeners — subscribe to live task events from the main process
   onTaskEvent(cb: (payload: TaskEventPayload) => void): void;

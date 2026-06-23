@@ -29,7 +29,7 @@ export class WorktreeManager {
    * Derived branch name: murl/task-<taskId>
    * Dedicated path: worktreesRoot/task-<taskId>
    */
-  async create(taskId: string): Promise<ManagedWorktree> {
+  async create(taskId: string, baseBranch?: string): Promise<ManagedWorktree> {
     const branchName = `murl/task-${taskId}`;
     const worktreePath = path.resolve(this.worktreesRoot, `task-${taskId}`);
 
@@ -43,7 +43,8 @@ export class WorktreeManager {
 
     // Run git worktree add
     const formattedPath = worktreePath.replace(/\\/g, '/');
-    await execAsync(`git worktree add -b "${branchName}" "${formattedPath}"`, {
+    const startPoint = baseBranch ? ` "${baseBranch}"` : '';
+    await execAsync(`git worktree add -b "${branchName}" "${formattedPath}"${startPoint}`, {
       cwd: this.baseRepoPath,
     });
 

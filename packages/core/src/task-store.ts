@@ -12,6 +12,8 @@ export interface PersistedTask {
   taskId: string;
   worktreePath: string;
   branch: string;
+  baseBranch?: string;
+  repoPath?: string;
   prompt: string;
   model: string;
   provider: string;
@@ -96,6 +98,18 @@ export class TaskStore {
         FOREIGN KEY(taskId) REFERENCES tasks(taskId) ON DELETE CASCADE
       );
     `);
+
+    // Safely add new columns if they do not exist
+    try {
+      this.db.exec('ALTER TABLE tasks ADD COLUMN baseBranch TEXT;');
+    } catch {
+      // Swallowed since the column likely already exists
+    }
+    try {
+      this.db.exec('ALTER TABLE tasks ADD COLUMN repoPath TEXT;');
+    } catch {
+      // Swallowed since the column likely already exists
+    }
   }
 
   createTask(task: Omit<PersistedTask, 'id' | 'createdAt' | 'completedAt' | 'outcome'>): PersistedTask {
@@ -105,8 +119,8 @@ export class TaskStore {
     const completedAt = null;
 
     const stmt = this.db.prepare(`
-      INSERT INTO tasks (id, taskId, worktreePath, branch, prompt, model, provider, status, createdAt, completedAt, outcome)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tasks (id, taskId, worktreePath, branch, baseBranch, repoPath, prompt, model, provider, status, createdAt, completedAt, outcome)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
@@ -114,6 +128,8 @@ export class TaskStore {
       task.taskId,
       task.worktreePath,
       task.branch,
+      task.baseBranch || 'main',
+      task.repoPath || '',
       task.prompt,
       task.model,
       task.provider,
@@ -128,6 +144,8 @@ export class TaskStore {
       taskId: task.taskId,
       worktreePath: task.worktreePath,
       branch: task.branch,
+      baseBranch: task.baseBranch || 'main',
+      repoPath: task.repoPath || '',
       prompt: task.prompt,
       model: task.model,
       provider: task.provider,
@@ -210,6 +228,8 @@ export class TaskStore {
       completedAt: taskRow.completedAt === null ? null : Number(taskRow.completedAt),
       createdAt: Number(taskRow.createdAt),
       outcome: taskRow.outcome as any,
+      baseBranch: taskRow.baseBranch || 'main',
+      repoPath: taskRow.repoPath || '',
     };
 
     // Query events
@@ -251,6 +271,8 @@ export class TaskStore {
       completedAt: row.completedAt === null ? null : Number(row.completedAt),
       createdAt: Number(row.createdAt),
       outcome: row.outcome as any,
+      baseBranch: row.baseBranch || 'main',
+      repoPath: row.repoPath || '',
     }));
   }
 

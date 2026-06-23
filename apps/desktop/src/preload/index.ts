@@ -60,12 +60,14 @@ const murlApi: MurlApi = {
   getRepoBranch: (path: string) => ipcRenderer.invoke('murl:getRepoBranch', path),
 
   // Task execution
-  launchTask: (repoPath: string, prompt: string, model: string) =>
-    ipcRenderer.invoke('murl:launchTask', repoPath, prompt, model),
+  launchTask: (repoPath: string, prompt: string, model: string, baseBranch?: string) =>
+    ipcRenderer.invoke('murl:launchTask', repoPath, prompt, model, baseBranch),
   cancelTask: (taskId: string) =>
     ipcRenderer.invoke('murl:cancelTask', taskId),
   getTaskHistory: () => ipcRenderer.invoke('murl:getTaskHistory'),
   getTaskRecord: (taskId: string) => ipcRenderer.invoke('murl:getTaskRecord', taskId),
+  keepTask: (taskId: string) => ipcRenderer.invoke('murl:keepTask', taskId),
+  discardTask: (taskId: string) => ipcRenderer.invoke('murl:discardTask', taskId),
 
   // Push event subscriptions
   onTaskEvent:    (cb) => taskEventBridge.on(cb as AnyFn),

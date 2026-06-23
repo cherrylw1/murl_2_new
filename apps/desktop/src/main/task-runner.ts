@@ -40,7 +40,8 @@ export class TaskRunner {
     repoPath: string,
     prompt: string,
     model: string,
-    webContents: WebContents
+    webContents: WebContents,
+    baseBranch?: string
   ): Promise<string> {
     const settings = loadSettings();
 
@@ -64,13 +65,15 @@ export class TaskRunner {
     const adapter = new OpenCodeAdapter(binPath ? { binPath } : undefined);
 
     // Create real worktree — can throw (e.g. git not found); caller gets the error
-    const worktree = await worktreeManager.create(taskId);
+    const worktree = await worktreeManager.create(taskId, baseBranch);
 
     // Persist initial task record before launching so History is consistent
     this.store.createTask({
       taskId,
       worktreePath: worktree.path,
       branch: worktree.branch,
+      baseBranch: baseBranch || 'main',
+      repoPath,
       prompt,
       model,
       provider: 'together',
@@ -124,6 +127,138 @@ export class TaskRunner {
 
   getRecord(taskId: string): TaskRecord | null {
     return this.store.getTask(taskId);
+  }
+
+  async keep(taskId: string): Promise<{ success: boolean; message?: string }> {
+    const record = this.store.getTask(taskId);
+    if (!record) {
+      return { success: false, message: `Task ${taskId} not found` };
+    }
+    if (record.task.status === 'running') {
+      return { success: false, message: 'Cannot keep a running task.' };
+    }
+    if (record.task.outcome !== null) {
+      return { success: false, message: `Task already has outcome: ${record.task.outcome}` };
+    }
+
+    const worktreePath = record.task.worktreePath;
+    const taskBranch = record.task.branch;
+    const baseBranch = record.task.baseBranch || 'main';
+    const baseRepoPath = record.task.repoPath || await this.getBaseRepoPath(worktreePath);
+
+    // Git commands execution helpers
+    const execInRepo = async (cmd: string) => {
+      const { exec } = await import('child_process');
+      const { promisify } = await import('util');
+      const execAsync = promisify(exec);
+      return execAsync(cmd, { cwd: baseRepoPath });
+    };
+
+    let didStash = false;
+    let originalHead = '';
+    let isDetached = false;
+
+    try {
+      // 1. Check if original repo is dirty. If so, stash changes to avoid merge blocking
+      const { stdout: statusOut } = await execInRepo('git status --porcelain');
+      if (statusOut.trim()) {
+        await execInRepo('git stash -u');
+        didStash = true;
+      }
+
+      // 2. Remember original HEAD
+      const { stdout: headOut } = await execInRepo('git rev-parse --abbrev-ref HEAD');
+      const headAbbrev = headOut.trim();
+      if (headAbbrev === 'HEAD') {
+        const { stdout: shaOut } = await execInRepo('git rev-parse HEAD');
+        originalHead = shaOut.trim();
+        isDetached = true;
+      } else {
+        originalHead = headAbbrev;
+      }
+
+      // 3. Checkout baseBranch
+      await execInRepo(`git checkout "${baseBranch}"`);
+
+      // 4. Perform git merge
+      try {
+        await execInRepo(`git merge "${taskBranch}" -m "Merge task branch ${taskBranch} into ${baseBranch}"`);
+      } catch (mergeErr: any) {
+        // Merge conflict or error! Abort immediately to leave repository clean.
+        await execInRepo('git merge --abort').catch(() => {});
+        // Switch back to original branch/commit
+        await execInRepo(`git checkout "${originalHead}"`);
+        if (didStash) {
+          await execInRepo('git stash pop').catch(() => {});
+        }
+        return {
+          success: false,
+          message: `Merge conflict or failure: ${mergeErr.message || String(mergeErr)}`,
+        };
+      }
+
+      // Merge succeeded! Restore original checked-out HEAD
+      await execInRepo(`git checkout "${originalHead}"`);
+      if (didStash) {
+        await execInRepo('git stash pop').catch(() => {});
+      }
+
+      // Clean up the worktree and local task branch
+      const worktreeManager = new WorktreeManager(baseRepoPath, path.dirname(worktreePath));
+      await worktreeManager.remove(worktreePath);
+
+      // Save outcome
+      this.store.setOutcome(taskId, 'kept');
+      return { success: true };
+    } catch (err: any) {
+      return {
+        success: false,
+        message: `Keep failed: ${err.message || String(err)}`,
+      };
+    }
+  }
+
+  async discard(taskId: string): Promise<{ success: boolean; message?: string }> {
+    const record = this.store.getTask(taskId);
+    if (!record) {
+      return { success: false, message: `Task ${taskId} not found` };
+    }
+    if (record.task.status === 'running') {
+      return { success: false, message: 'Cannot discard a running task.' };
+    }
+    if (record.task.outcome !== null) {
+      return { success: false, message: `Task already has outcome: ${record.task.outcome}` };
+    }
+
+    const worktreePath = record.task.worktreePath;
+    const baseRepoPath = record.task.repoPath || await this.getBaseRepoPath(worktreePath);
+
+    try {
+      const worktreeManager = new WorktreeManager(baseRepoPath, path.dirname(worktreePath));
+      await worktreeManager.remove(worktreePath);
+
+      this.store.setOutcome(taskId, 'discarded');
+      return { success: true };
+    } catch (err: any) {
+      return {
+        success: false,
+        message: `Discard failed: ${err.message || String(err)}`,
+      };
+    }
+  }
+
+  private async getBaseRepoPath(worktreePath: string): Promise<string> {
+    const { exec } = await import('child_process');
+    const { promisify } = await import('util');
+    const execAsync = promisify(exec);
+    try {
+      const { stdout } = await execAsync('git rev-parse --git-common-dir', { cwd: worktreePath });
+      const gitCommonDir = path.resolve(worktreePath, stdout.trim());
+      return path.dirname(gitCommonDir);
+    } catch {
+      // Fallback: parent dir of the worktree directory if git command fails
+      return path.dirname(worktreePath);
+    }
   }
 
   private async _runAsync(

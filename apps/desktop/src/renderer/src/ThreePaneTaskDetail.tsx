@@ -147,6 +147,46 @@ export default function ThreePaneTaskDetail({
   const [selectedFile, setSelectedFile] = useState<string>('');
   const eventLogBottomRef = useRef<HTMLDivElement>(null);
 
+  const [outcome, setOutcome] = useState<'kept' | 'discarded' | null>((task.outcome as any) || null);
+  const [outcomeError, setOutcomeError] = useState<string | null>(null);
+  const [isOutcomePending, setIsOutcomePending] = useState<boolean>(false);
+
+  const handleKeep = async () => {
+    if (!task.taskId) return;
+    setIsOutcomePending(true);
+    setOutcomeError(null);
+    try {
+      const result = await window.murl.keepTask(task.taskId);
+      if (result.success) {
+        setOutcome('kept');
+      } else {
+        setOutcomeError(result.message || 'Failed to keep task changes.');
+      }
+    } catch (err: any) {
+      setOutcomeError(err.message || String(err));
+    } finally {
+      setIsOutcomePending(false);
+    }
+  };
+
+  const handleDiscard = async () => {
+    if (!task.taskId) return;
+    setIsOutcomePending(true);
+    setOutcomeError(null);
+    try {
+      const result = await window.murl.discardTask(task.taskId);
+      if (result.success) {
+        setOutcome('discarded');
+      } else {
+        setOutcomeError(result.message || 'Failed to discard task.');
+      }
+    } catch (err: any) {
+      setOutcomeError(err.message || String(err));
+    } finally {
+      setIsOutcomePending(false);
+    }
+  };
+
   // Parse diff whenever it changes
   useEffect(() => {
     const files = parseGitDiff(diff);
@@ -217,6 +257,39 @@ export default function ThreePaneTaskDetail({
                 Cancel
               </button>
             )}
+
+            {isOutcomePending && (
+              <span className="text-label text-aluminium animate-breath">
+                Processing merge decision…
+              </span>
+            )}
+
+            {runState === 'completed' && outcome === null && !isOutcomePending && (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleKeep}
+                  className="px-4 py-1.5 rounded bg-carbon border border-aluminium/20 text-label text-chalk font-semibold hover:shadow-active transition-taste"
+                >
+                  Keep
+                </button>
+                <button
+                  onClick={handleDiscard}
+                  className="px-4 py-1.5 rounded bg-transparent border border-aluminium/15 text-label text-aluminium hover:text-chalk hover:border-aluminium/30 transition-taste"
+                >
+                  Discard
+                </button>
+              </div>
+            )}
+
+            {outcome && (
+              <div className={`text-label text-[10px] px-2.5 py-1 rounded border font-mono select-none font-semibold ${
+                outcome === 'kept'
+                  ? 'border-aluminium/20 text-chalk bg-carbon/50 shadow-active animate-breath'
+                  : 'border-transparent text-aluminium/65 bg-carbon/25'
+              }`}>
+                {outcome === 'kept' ? 'kept & merged' : 'discarded'}
+              </div>
+            )}
           </div>
         </div>
 
@@ -247,6 +320,16 @@ export default function ThreePaneTaskDetail({
             <div className="flex flex-col gap-0.5">
               <span className="text-label text-signal tracking-wider font-semibold">FAILURE ERROR LOG</span>
               <span className="text-data text-signal/80 text-xs break-words">{errorMessage}</span>
+            </div>
+          </div>
+        )}
+
+        {outcomeError && (
+          <div className="bg-carbon/50 border border-signal/30 p-3.5 rounded flex items-start gap-3">
+            <div className="w-2.5 h-2.5 rounded-full bg-signal shadow-signal animate-pulse-signal mt-1 flex-shrink-0" />
+            <div className="flex flex-col gap-0.5">
+              <span className="text-label text-signal tracking-wider font-semibold">MERGE DECISION ERROR</span>
+              <span className="text-data text-signal/80 text-xs break-words">{outcomeError}</span>
             </div>
           </div>
         )}

@@ -172,4 +172,27 @@ describe('WorktreeManager', () => {
     // Clean up
     await Promise.all(results.map((r: any) => manager.remove(r.path)));
   });
+
+  it('should successfully create a worktree branching off a custom base branch', async () => {
+    // Create a custom base branch
+    await execAsync('git checkout -b feature-base', { cwd: baseRepoPath });
+    fs.writeFileSync(path.join(baseRepoPath, 'feature.txt'), 'feature content');
+    await execAsync('git add feature.txt', { cwd: baseRepoPath });
+    await execAsync('git commit -m "add feature file"', { cwd: baseRepoPath });
+
+    // Switch back to main so main is HEAD
+    await execAsync('git checkout main', { cwd: baseRepoPath });
+
+    // Create worktree specifying feature-base as baseBranch
+    const taskId = 'test-custom-base';
+    const result = await manager.create(taskId, 'feature-base');
+
+    // The worktree should have feature.txt because it branched off feature-base
+    expect(fs.existsSync(path.join(result.path, 'feature.txt'))).toBe(true);
+    expect(fs.readFileSync(path.join(result.path, 'feature.txt'), 'utf8')).toBe('feature content');
+
+    // Clean up worktree and delete local test branch
+    await manager.remove(result.path);
+    await execAsync('git branch -D feature-base', { cwd: baseRepoPath });
+  });
 });
