@@ -3,8 +3,11 @@
   "version": "1.0.0",
   "main": "out/main/index.js",
   "scripts": {
+    "predev": "pnpm --filter @murl/core build",
     "dev": "electron-vite dev",
+    "prebuild": "pnpm --filter @murl/core build",
     "build": "electron-vite build",
+    "prestart": "pnpm --filter @murl/core build",
     "start": "electron-vite preview",
     "typecheck": "tsc -b"
   },
