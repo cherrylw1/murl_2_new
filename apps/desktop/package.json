@@ -1,12 +1,24 @@
 {
   "name": "@murl/desktop",
   "version": "1.0.0",
-  "main": "dist/index.js",
+  "main": "out/main/index.mjs",
   "scripts": {
-    "build": "tsc",
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
     "typecheck": "tsc -b"
   },
   "dependencies": {
-    "@murl/core": "workspace:*"
+    "@murl/core": "workspace:*",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.2",
+    "electron": "^35.7.5",
+    "electron-vite": "^5.0.0",
+    "vite": "^8.0.16"
   }
 }
