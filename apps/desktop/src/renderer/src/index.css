@@ -219,3 +219,85 @@ a:focus,
     transition: none !important;
   }
 }
+
+/* ------------------------------------------------------------- */
+/* 7. Syntax Highlighting Custom Theme (Murl monochrome style)   */
+/* ------------------------------------------------------------- */
+
+/* Base code block font */
+.token {
+  font-family: "Geist Mono", "JetBrains Mono", monospace;
+}
+
+/* Restrained Monochrome palette:
+   - aluminium for comments, low contrast structure
+   - chalk for keywords, operators, values, names
+   - no pink, red, blue, green, etc.
+*/
+.token.comment,
+.token.prolog,
+.token.doctype,
+.token.cdata {
+  color: var(--c-aluminium) !important;
+  opacity: 0.5;
+  font-style: italic;
+}
+
+.token.punctuation {
+  color: var(--c-chalk) !important;
+  opacity: 0.7;
+}
+
+.token.property,
+.token.tag,
+.token.boolean,
+.token.number,
+.token.constant,
+.token.symbol,
+.token.deleted {
+  color: var(--c-chalk) !important;
+}
+
+.token.selector,
+.token.attr-name,
+.token.string,
+.token.char,
+.token.builtin,
+.token.inserted {
+  color: var(--c-aluminium) !important;
+}
+
+.token.operator,
+.token.entity,
+.token.url,
+.language-css .token.string,
+.style .token.string {
+  color: var(--c-chalk) !important;
+}
+
+.token.atrule,
+.token.attr-value,
+.token.keyword {
+  color: var(--c-chalk) !important;
+  font-weight: 600;
+}
+
+.token.function,
+.token.class-name {
+  color: var(--c-chalk) !important;
+}
+
+.token.regex,
+.token.important,
+.token.variable {
+  color: var(--c-aluminium) !important;
+}
+
+.token.important,
+.token.bold {
+  font-weight: bold;
+}
+
+.token.italic {
+  font-style: italic;
+}

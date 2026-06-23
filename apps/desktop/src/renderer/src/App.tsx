@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   HarnessSettings,
   MurlEvent,
@@ -8,7 +8,9 @@ import {
   TaskCompletePayload,
   TaskEventPayload,
   TaskFailedPayload,
+  TaskRecord,
 } from '../../preload/types.js';
+import ThreePaneTaskDetail from './ThreePaneTaskDetail.js';
 
 // ─── Local types ──────────────────────────────────────────────────────────────
 
@@ -23,43 +25,7 @@ type TaskRunState = 'idle' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 // ─── Event log renderer ───────────────────────────────────────────────────────
 
-function renderEvent(event: MurlEvent, idx: number): React.ReactNode {
-  if (event.type === 'status') {
-    return (
-      <div key={idx} className="text-aluminium/70 text-xs py-0.5">
-        ● {event.status.toUpperCase()}{event.error ? ` — ${event.error}` : ''}
-      </div>
-    );
-  }
-  if (event.type === 'message') {
-    if (event.contentType === 'reasoning' && event.content) {
-      return (
-        <div key={idx} className="text-aluminium/50 text-xs italic whitespace-pre-wrap break-words py-0.5">
-          [thinking] {event.content.length > 200 ? `${event.content.slice(0, 200)}…` : event.content}
-        </div>
-      );
-    }
-    if (event.content) {
-      return (
-        <div key={idx} className="text-chalk text-xs whitespace-pre-wrap break-words py-0.5">
-          {event.content}
-        </div>
-      );
-    }
-    return null;
-  }
-  if (event.type === 'action') {
-    const arrow = event.actionType === 'tool_call' ? '→' : '←';
-    return (
-      <div key={idx} className="text-aluminium text-xs py-0.5">
-        <span className="text-aluminium/60">{arrow}</span>{' '}
-        <span className="font-semibold">{event.toolName}</span>{' '}
-        <span className="text-aluminium/50">[{event.status}]</span>
-      </div>
-    );
-  }
-  return null;
-}
+// renderEvent moved to ThreePaneTaskDetail.tsx
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
@@ -85,6 +51,8 @@ export default function App(): React.JSX.Element {
   const [taskDiff, setTaskDiff] = useState<string>('');
   const [taskError, setTaskError] = useState<string>('');
   const [taskHistory, setTaskHistory] = useState<PersistedTask[]>([]);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [selectedTaskRecord, setSelectedTaskRecord] = useState<TaskRecord | null>(null);
 
   // Settings
   const [apiKeyConfigured, setApiKeyConfigured] = useState<boolean>(false);
@@ -100,8 +68,7 @@ export default function App(): React.JSX.Element {
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [testMessage, setTestMessage] = useState<string>('');
 
-  // Auto-scroll anchor for live event log
-  const eventLogBottomRef = useRef<HTMLDivElement>(null);
+  // eventLogBottomRef is now in ThreePaneTaskDetail.tsx
 
   // ─── Data fetchers ──────────────────────────────────────────────────────────
 
@@ -181,10 +148,7 @@ export default function App(): React.JSX.Element {
     };
   }, [activeTaskId, fetchTaskHistory]);
 
-  // Auto-scroll event log to bottom whenever new events arrive
-  useEffect(() => {
-    eventLogBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [liveEvents]);
+  // Auto-scroll is handled by ThreePaneTaskDetail.tsx
 
   // ─── Handlers ───────────────────────────────────────────────────────────────
 
@@ -353,7 +317,13 @@ export default function App(): React.JSX.Element {
             {(['tasks', 'recipes', 'history', 'settings'] as TabType[]).map((tab) => (
               <button
                 key={tab}
-                onClick={() => setActiveTab(tab)}
+                onClick={() => {
+                  setActiveTab(tab);
+                  if (tab !== 'history') {
+                    setSelectedTaskId(null);
+                    setSelectedTaskRecord(null);
+                  }
+                }}
                 className={`w-full text-left py-3 px-4 rounded transition-taste text-label ${
                   activeTab === tab
                     ? 'bg-carbon text-chalk border border-aluminium/20'
@@ -378,142 +348,23 @@ export default function App(): React.JSX.Element {
             {activeTab === 'tasks' && (
               <div className="flex-1 flex flex-col justify-between h-full overflow-hidden">
 
-                {/* RUNNING VIEW */}
-                {taskRunState === 'running' && (
-                  <div className="flex-1 flex flex-col justify-between h-full overflow-hidden">
-                    <div className="flex-1 min-h-0 flex flex-col gap-4 overflow-hidden">
-                      <div>
-                        <div className="text-label text-aluminium mb-1">CURRENT AREA</div>
-                        <h2 className="text-title text-chalk mb-2 font-semibold">Task Running</h2>
-                        <div className="flex items-center gap-2">
-                          <div className="w-2 h-2 rounded-full bg-chalk shadow-active animate-breath" />
-                          <span className="text-data text-aluminium/70 text-xs font-mono">{activeTaskId}</span>
-                        </div>
-                      </div>
-
-                      {/* Live event log */}
-                      <div className="flex-1 min-h-0 bg-well border border-aluminium/20 rounded-lg p-4 overflow-y-auto font-mono">
-                        <div className="text-label text-aluminium/50 mb-3 text-[10px] tracking-wider">LIVE EVENT STREAM</div>
-                        {liveEvents.length === 0 ? (
-                          <div className="text-aluminium/40 text-xs">Waiting for OpenCode to start…</div>
-                        ) : (
-                          liveEvents.map((ev, i) => renderEvent(ev, i))
-                        )}
-                        <div ref={eventLogBottomRef} />
-                      </div>
-                    </div>
-
-                    <div className="flex gap-4 border-t border-aluminium/10 pt-6 mt-4">
-                      <button
-                        onClick={handleCancelTask}
-                        className="px-6 py-2.5 rounded bg-carbon border border-signal/40 text-body text-signal font-semibold hover:bg-signal/10 transition-taste"
-                      >
-                        Cancel Task
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* COMPLETED VIEW */}
-                {taskRunState === 'completed' && (
-                  <div className="flex-1 flex flex-col justify-between h-full overflow-hidden">
-                    <div className="flex-1 min-h-0 flex flex-col gap-6 overflow-hidden">
-                      <div>
-                        <div className="text-label text-aluminium mb-1">CURRENT AREA</div>
-                        <h2 className="text-title text-chalk mb-2 font-semibold">Task Complete</h2>
-                      </div>
-
-                      <div className="flex items-center gap-2 bg-carbon/50 border border-aluminium/20 px-4 py-3 rounded">
-                        <div className="w-2.5 h-2.5 rounded-full bg-chalk shadow-active animate-breath" />
-                        <span className="text-label text-chalk tracking-wider font-semibold">TASK COMPLETED SUCCESSFULLY</span>
-                      </div>
-
-                      <div className="flex flex-col gap-2 flex-1 min-h-0 overflow-hidden">
-                        <div className="text-label text-aluminium text-[10px] tracking-wider">GIT DIFF</div>
-                        <pre className="flex-1 min-h-0 bg-well border border-aluminium/20 rounded p-4 text-xs font-mono text-chalk overflow-auto whitespace-pre">
-                          {taskDiff || '(no diff — no files were changed)'}
-                        </pre>
-                      </div>
-                    </div>
-
-                    <div className="flex gap-4 border-t border-aluminium/10 pt-6 mt-4">
-                      <button
-                        onClick={resetToQueue}
-                        className="px-6 py-2.5 rounded bg-carbon border border-aluminium/20 text-body text-chalk font-semibold hover:shadow-active transition-taste"
-                      >
-                        Back to Queue
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* FAILED VIEW */}
-                {taskRunState === 'failed' && (
-                  <div className="flex-1 flex flex-col justify-between">
-                    <div className="flex flex-col gap-6 max-w-xl">
-                      <div>
-                        <div className="text-label text-aluminium mb-1">CURRENT AREA</div>
-                        <h2 className="text-title text-chalk mb-2 font-semibold">Task Failed</h2>
-                      </div>
-
-                      <div className="flex items-start gap-3 bg-carbon/50 border border-signal/30 px-4 py-4 rounded">
-                        <div className="w-2.5 h-2.5 rounded-full bg-signal shadow-signal animate-pulse-signal mt-0.5 flex-shrink-0" />
-                        <div className="flex flex-col gap-1">
-                          <span className="text-label text-signal tracking-wider font-semibold">TASK FAILED</span>
-                          <span className="text-data text-signal/80 text-xs break-words">{taskError}</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex gap-4 border-t border-aluminium/10 pt-6 mt-6">
-                      <button
-                        onClick={() => {
-                          setTaskRunState('idle');
-                          setActiveTaskId(null);
-                          setLiveEvents([]);
-                          setTaskError('');
-                          // Keep form state so user can retry immediately
-                          setIsCreatingTask(true);
-                        }}
-                        className="px-6 py-2.5 rounded bg-carbon border border-aluminium/20 text-body text-chalk font-semibold hover:shadow-active transition-taste"
-                      >
-                        Retry
-                      </button>
-                      <button
-                        onClick={resetToQueue}
-                        className="px-6 py-2.5 rounded bg-transparent border border-aluminium/15 text-body text-aluminium hover:text-chalk hover:border-aluminium/30 transition-taste"
-                      >
-                        Back to Queue
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* CANCELLED VIEW */}
-                {taskRunState === 'cancelled' && (
-                  <div className="flex-1 flex flex-col justify-between">
-                    <div className="flex flex-col gap-6 max-w-xl">
-                      <div>
-                        <div className="text-label text-aluminium mb-1">CURRENT AREA</div>
-                        <h2 className="text-title text-chalk mb-2 font-semibold">Task Cancelled</h2>
-                      </div>
-
-                      <div className="flex items-center gap-3 bg-carbon/50 border border-aluminium/20 px-4 py-4 rounded">
-                        <div className="w-2.5 h-2.5 rounded-full bg-aluminium" />
-                        <span className="text-label text-aluminium tracking-wider font-semibold">TASK CANCELLED — worktree cleaned up</span>
-                      </div>
-                    </div>
-
-                    <div className="flex gap-4 border-t border-aluminium/10 pt-6 mt-6">
-                      <button
-                        onClick={resetToQueue}
-                        className="px-6 py-2.5 rounded bg-carbon border border-aluminium/20 text-body text-chalk font-semibold hover:shadow-active transition-taste"
-                      >
-                        Back to Queue
-                      </button>
-                    </div>
-                  </div>
-                )}
+                {/* 3-PANE TASK DETAIL VIEW */}
+                {taskRunState !== 'idle' ? (
+                  <ThreePaneTaskDetail
+                    task={{
+                      taskId: activeTaskId || undefined,
+                      prompt: taskDescription,
+                      model: taskModel,
+                      branch: taskBranch,
+                    }}
+                    events={liveEvents}
+                    diff={taskDiff}
+                    runState={taskRunState}
+                    errorMessage={taskError}
+                    onBack={resetToQueue}
+                    onCancel={taskRunState === 'running' ? handleCancelTask : undefined}
+                  />
+                ) : null}
 
                 {/* CREATE TASK FORM */}
                 {taskRunState === 'idle' && isCreatingTask && (
@@ -733,57 +584,93 @@ export default function App(): React.JSX.Element {
 
             {/* ── HISTORY TAB ─────────────────────────────────────────────── */}
             {activeTab === 'history' && (
-              <div className="flex-1 flex flex-col justify-between">
-                <div>
-                  <div className="text-label text-aluminium mb-1">CURRENT AREA</div>
-                  <h2 className="text-title text-chalk mb-6">Recent Runs</h2>
+              selectedTaskId && selectedTaskRecord ? (
+                <div className="flex-1 flex flex-col justify-between h-full overflow-hidden">
+                  <ThreePaneTaskDetail
+                    task={selectedTaskRecord.task}
+                    events={selectedTaskRecord.events}
+                    diff={selectedTaskRecord.diff || ''}
+                    runState={selectedTaskRecord.task.status as any}
+                    errorMessage={
+                      selectedTaskRecord.task.status === 'failed'
+                        ? (selectedTaskRecord.events.find((e) => e.type === 'status' && (e as any).error) as any)?.error ||
+                          'Task execution failed'
+                        : undefined
+                    }
+                    onBack={() => {
+                      setSelectedTaskId(null);
+                      setSelectedTaskRecord(null);
+                      fetchTaskHistory();
+                    }}
+                  />
+                </div>
+              ) : (
+                <div className="flex-1 flex flex-col justify-between">
+                  <div>
+                    <div className="text-label text-aluminium mb-1">CURRENT AREA</div>
+                    <h2 className="text-title text-chalk mb-6">Recent Runs</h2>
 
-                  {taskHistory.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center border border-dashed border-aluminium/10 rounded-lg py-16 px-4 bg-carbon/20">
-                      <p className="text-data text-aluminium text-center max-w-sm">
-                        No run history found. Run a task to see history and cost logs.
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="flex flex-col gap-3 max-w-xl">
-                      {taskHistory.map((t) => (
-                        <div key={t.taskId} className="p-4 bg-carbon/40 rounded border border-aluminium/10 flex flex-col gap-1">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <div className={`w-2 h-2 rounded-full ${
-                                t.status === 'completed' ? 'bg-chalk shadow-active' :
-                                t.status === 'failed'    ? 'bg-signal shadow-signal' :
-                                t.status === 'cancelled' ? 'bg-aluminium' :
-                                'bg-aluminium animate-breath'
-                              }`} />
-                              <span className={`text-label text-xs font-semibold ${
-                                t.status === 'completed' ? 'text-chalk' :
-                                t.status === 'failed'    ? 'text-signal' :
-                                'text-aluminium'
-                              }`}>
-                                {t.status.toUpperCase()}
+                    {taskHistory.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center border border-dashed border-aluminium/10 rounded-lg py-16 px-4 bg-carbon/20">
+                        <p className="text-data text-aluminium text-center max-w-sm">
+                          No run history found. Run a task to see history and cost logs.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-3 max-w-xl">
+                        {taskHistory.map((t) => (
+                          <div
+                            key={t.taskId}
+                            onClick={async () => {
+                              try {
+                                const record = await window.murl.getTaskRecord(t.taskId);
+                                if (record) {
+                                  setSelectedTaskId(t.taskId);
+                                  setSelectedTaskRecord(record);
+                                }
+                              } catch (err) {
+                                console.error('Failed to load task record:', err);
+                              }
+                            }}
+                            className="p-4 bg-carbon/40 rounded border border-aluminium/10 flex flex-col gap-1 hover:border-aluminium/35 hover:bg-carbon/60 cursor-pointer transition-taste"
+                          >
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <div className={`w-2 h-2 rounded-full ${
+                                  t.status === 'completed' ? 'bg-chalk shadow-active' :
+                                  t.status === 'failed'    ? 'bg-signal shadow-signal' :
+                                  t.status === 'cancelled' ? 'bg-aluminium' :
+                                  'bg-aluminium animate-breath'
+                                }`} />
+                                <span className={`text-label text-xs font-semibold ${
+                                  t.status === 'completed' ? 'text-chalk' :
+                                  t.status === 'failed'    ? 'text-signal' :
+                                  'text-aluminium'
+                                }`}>
+                                  {t.status.toUpperCase()}
+                                </span>
+                              </div>
+                              <span className="text-data text-aluminium/60 text-xs">
+                                {new Date(t.createdAt).toLocaleString()}
                               </span>
                             </div>
-                            <span className="text-data text-aluminium/60 text-xs">
-                              {new Date(t.createdAt).toLocaleString()}
-                            </span>
+                            <div className="text-body text-chalk text-xs truncate mt-1">{t.prompt}</div>
+                            <div className="text-data text-aluminium/60 text-xs truncate">{t.model} · {t.branch}</div>
                           </div>
-                          <div className="text-body text-chalk text-xs truncate mt-1">{t.prompt}</div>
-                          <div className="text-data text-aluminium/60 text-xs truncate">{t.model} · {t.branch}</div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex gap-4 border-t border-aluminium/10 pt-6">
+                    <button
+                      onClick={fetchTaskHistory}
+                      className="px-6 py-2.5 rounded bg-carbon border border-aluminium/20 text-body text-chalk font-semibold hover:shadow-active transition-taste"
+                    >
+                      Refresh History
+                    </button>
+                  </div>
                 </div>
-                <div className="flex gap-4 border-t border-aluminium/10 pt-6">
-                  <button
-                    onClick={fetchTaskHistory}
-                    className="px-6 py-2.5 rounded bg-carbon border border-aluminium/20 text-body text-chalk font-semibold hover:shadow-active transition-taste"
-                  >
-                    Refresh History
-                  </button>
-                </div>
-              </div>
+              )
             )}
 
             {/* ── SETTINGS TAB ────────────────────────────────────────────── */}
