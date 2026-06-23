@@ -1,0 +1,221 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ------------------------------------------------------------- */
+/* 1. Self-hosted Font Declarations                              */
+/* ------------------------------------------------------------- */
+
+@font-face {
+  font-family: 'LED Counter 7';
+  src: url('../assets/fonts/led-counter-7/led_counter-7.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'LED Counter 7';
+  src: url('../assets/fonts/led-counter-7/led_counter-7_italic.ttf') format('truetype');
+  font-weight: normal;
+  font-style: italic;
+}
+
+@font-face {
+  font-family: 'Geist Sans';
+  src: url('../assets/fonts/geist/Geist-Variable.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('../assets/fonts/geist/GeistMono-Variable.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'Inter';
+  src: url('../assets/fonts/inter/inter-latin-400-normal.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'Inter';
+  src: url('../assets/fonts/inter/inter-latin-500-normal.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'Inter';
+  src: url('../assets/fonts/inter/inter-latin-600-normal.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'Inter';
+  src: url('../assets/fonts/inter/inter-latin-700-normal.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('../assets/fonts/jetbrains-mono/jetbrains-mono-latin-400-normal.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+}
+
+/* ------------------------------------------------------------- */
+/* 2. Global CSS Variables                                       */
+/* ------------------------------------------------------------- */
+
+:root {
+  --c-ink: #0A0A0A;
+  --c-well: #000000;
+  --c-carbon: #161616;
+  --c-aluminium: #8A8A8A;
+  --c-chalk: #FAFAFA;
+  --c-signal: #D71921;
+  --c-panel: rgba(22, 22, 22, 0.90); /* carbon @ 90% */
+  --c-hairline: rgba(138, 138, 138, 0.18);
+  --glow-active: 0 0 24px rgba(250, 250, 250, 0.12);
+  --glow-signal: 0 0 20px rgba(215, 25, 33, 0.30);
+}
+
+/* ------------------------------------------------------------- */
+/* 3. Base Styles & Global Resets                                */
+/* ------------------------------------------------------------- */
+
+body {
+  margin: 0;
+  background-color: var(--c-ink);
+  color: var(--c-chalk);
+  font-family: "Geist Sans", Inter, system-ui, sans-serif;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Base focus indicator */
+button:focus,
+a:focus,
+[tabindex]:focus {
+  outline: none;
+  box-shadow: 0 0 0 1px var(--c-chalk);
+}
+
+/* ------------------------------------------------------------- */
+/* 4. Custom Layout Utilities                                    */
+/* ------------------------------------------------------------- */
+
+.panel {
+  background: var(--c-panel);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid var(--c-hairline);
+  border-radius: 6px;
+}
+
+/* ------------------------------------------------------------- */
+/* 5. Typography Scale                                           */
+/* ------------------------------------------------------------- */
+
+.text-display-dot {
+  font-family: "LED Counter 7", monospace;
+  font-size: 28px;
+  line-height: 32px;
+}
+
+.text-title {
+  font-family: "Geist Sans", Inter, sans-serif;
+  font-weight: 600;
+  font-size: 18px;
+  line-height: 24px;
+}
+
+.text-body {
+  font-family: "Geist Sans", Inter, sans-serif;
+  font-weight: 450;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.text-label {
+  font-family: "Geist Sans", Inter, sans-serif;
+  font-weight: 500;
+  font-size: 12px;
+  line-height: 16px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.text-data {
+  font-family: "Geist Mono", "JetBrains Mono", monospace;
+  font-weight: 400;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.text-micro-dot {
+  font-family: "LED Counter 7", monospace;
+  font-size: 10px;
+  line-height: 12px;
+}
+
+/* ------------------------------------------------------------- */
+/* 6. Motion & Animations                                        */
+/* ------------------------------------------------------------- */
+
+@keyframes breath {
+  0%, 100% {
+    opacity: 0.55;
+    box-shadow: 0 0 8px rgba(250, 250, 250, 0.04);
+  }
+  50% {
+    opacity: 1;
+    box-shadow: var(--glow-active);
+  }
+}
+
+@keyframes pulse-signal {
+  0%, 100% {
+    opacity: 0.6;
+    box-shadow: 0 0 6px rgba(215, 25, 33, 0.1);
+  }
+  50% {
+    opacity: 1;
+    box-shadow: var(--glow-signal);
+  }
+}
+
+.animate-breath {
+  animation: breath 3s ease-in-out infinite;
+}
+
+.animate-pulse-signal {
+  animation: pulse-signal 1s ease-in-out infinite;
+}
+
+/* Transitions config */
+.transition-taste {
+  transition-property: transform, opacity;
+  transition-duration: 200ms;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* prefers-reduced-motion media query */
+@media (prefers-reduced-motion: reduce) {
+  .animate-breath,
+  .animate-pulse-signal {
+    animation: none !important;
+    opacity: 1 !important;
+    box-shadow: none !important;
+  }
+  .transition-taste {
+    transition: none !important;
+  }
+}
