@@ -21,7 +21,7 @@ interface HealthStatus {
 }
 
 type TabType = 'tasks' | 'recipes' | 'history' | 'settings';
-type TaskRunState = 'idle' | 'running' | 'completed' | 'failed' | 'cancelled';
+type TaskRunState = 'idle' | 'running' | 'completed' | 'failed' | 'cancelled' | 'queued';
 
 // ─── Event log renderer ───────────────────────────────────────────────────────
 
@@ -113,6 +113,15 @@ export default function App(): React.JSX.Element {
     const handleEvent = (payload: TaskEventPayload) => {
       if (payload.taskId !== activeTaskId) return;
       setLiveEvents((prev) => [...prev, payload.event]);
+      if (payload.event.type === 'status') {
+        if (payload.event.status === 'queued') {
+          setTaskRunState('queued');
+          fetchTaskHistory();
+        } else if (payload.event.status === 'started' || payload.event.status === 'running') {
+          setTaskRunState('running');
+          fetchTaskHistory();
+        }
+      }
     };
 
     const handleComplete = (payload: TaskCompletePayload) => {
@@ -238,7 +247,12 @@ export default function App(): React.JSX.Element {
       setTaskError('');
       const taskId = await window.murl.launchTask(activeRepo.path, taskDescription, taskModel, taskBranch);
       setActiveTaskId(taskId);
-      setTaskRunState('running');
+      const record = await window.murl.getTaskRecord(taskId);
+      if (record) {
+        setTaskRunState(record.task.status as any);
+      } else {
+        setTaskRunState('running');
+      }
     } catch (err: unknown) {
       setLauncherError((err as Error).message || String(err));
     }
@@ -362,7 +376,7 @@ export default function App(): React.JSX.Element {
                     runState={taskRunState}
                     errorMessage={taskError}
                     onBack={resetToQueue}
-                    onCancel={taskRunState === 'running' ? handleCancelTask : undefined}
+                    onCancel={(taskRunState === 'running' || taskRunState === 'queued') ? handleCancelTask : undefined}
                   />
                 ) : null}
 
@@ -602,6 +616,20 @@ export default function App(): React.JSX.Element {
                       setSelectedTaskRecord(null);
                       fetchTaskHistory();
                     }}
+                    onCancel={
+                      selectedTaskRecord.task.status === 'running' || selectedTaskRecord.task.status === 'queued'
+                        ? async () => {
+                            try {
+                              await window.murl.cancelTask(selectedTaskRecord.task.taskId);
+                              const record = await window.murl.getTaskRecord(selectedTaskRecord.task.taskId);
+                              setSelectedTaskRecord(record);
+                              fetchTaskHistory();
+                            } catch (err) {
+                              console.error('Failed to cancel task:', err);
+                            }
+                          }
+                        : undefined
+                    }
                   />
                 </div>
               ) : (
@@ -640,14 +668,18 @@ export default function App(): React.JSX.Element {
                                   t.status === 'completed' ? 'bg-chalk shadow-active' :
                                   t.status === 'failed'    ? 'bg-signal shadow-signal' :
                                   t.status === 'cancelled' ? 'bg-aluminium' :
+                                  t.status === 'queued'    ? 'bg-aluminium/30' :
                                   'bg-aluminium animate-breath'
                                 }`} />
                                 <span className={`text-label text-xs font-semibold ${
                                   t.status === 'completed' ? 'text-chalk' :
                                   t.status === 'failed'    ? 'text-signal' :
+                                  t.status === 'queued'    ? 'text-aluminium/50' :
                                   'text-aluminium'
                                 }`}>
-                                  {t.status.toUpperCase()}
+                                  {t.status === 'queued' && t.queuePosition !== undefined
+                                    ? `QUEUED (${t.queuePosition === 0 ? 'next' : `${t.queuePosition} ahead`})`
+                                    : t.status.toUpperCase()}
                                 </span>
                                 {t.outcome && (
                                   <span className={`text-label text-[9px] px-1.5 py-0.5 rounded border font-mono select-none ${

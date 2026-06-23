@@ -23,8 +23,20 @@ interface ActiveTask {
   worktreeManager: WorktreeManager;
 }
 
+interface QueuedTask {
+  taskId: string;
+  repoPath: string;
+  prompt: string;
+  model: string;
+  webContents: WebContents;
+  baseBranch?: string;
+}
+
 export class TaskRunner {
   private activeTasks = new Map<string, ActiveTask>();
+  private queue: QueuedTask[] = [];
+  private queueProcessing = false;
+  private lastStartTimestamp = 0;
   private store: TaskStore;
 
   constructor(dbPath: string) {
@@ -51,70 +63,217 @@ export class TaskRunner {
       throw new Error('Worktree root is not configured in settings.');
     }
 
-    // OpenCode binary resolution:
-    //   1. settings.openCodePathOverride (user-configured explicit path)
-    //   2. Falls through to adapter's own resolveBinPath():
-    //      a. OPENCODE_BIN_PATH env var
-    //      b. C:/Content/murl_spike dev-only fallback (guarded by fs.existsSync — silent on fresh clones)
-    //      c. 'opencode' on PATH — explicit error from spawn() if not found
-    const binPath = settings.openCodePathOverride || undefined;
-
     const taskId = crypto.randomUUID();
 
-    const worktreeManager = new WorktreeManager(repoPath, worktreeRoot);
-    const adapter = new OpenCodeAdapter(binPath ? { binPath } : undefined);
+    // Compute expected branchName and worktreePath deterministically for database representation
+    const branchName = `murl/task-${taskId}`;
+    const worktreePath = path.resolve(worktreeRoot, `task-${taskId}`);
 
-    // Create real worktree — can throw (e.g. git not found); caller gets the error
-    const worktree = await worktreeManager.create(taskId, baseBranch);
-
-    // Persist initial task record before launching so History is consistent
+    // Persist initial task record as 'queued'
     this.store.createTask({
       taskId,
-      worktreePath: worktree.path,
-      branch: worktree.branch,
+      worktreePath,
+      branch: branchName,
       baseBranch: baseBranch || 'main',
       repoPath,
       prompt,
       model,
       provider: 'together',
-      status: 'running',
+      status: 'queued',
     });
 
-    const abortController = new AbortController();
-    const activeEntry: ActiveTask = {
-      abortController,
-      wasCancelled: false,
-      worktreePath: worktree.path,
-      worktreeManager,
-    };
-    this.activeTasks.set(taskId, activeEntry);
+    // Notify renderer that it is queued immediately
+    try {
+      if (!webContents.isDestroyed()) {
+        webContents.send('murl:task-event', {
+          taskId,
+          event: { type: 'status', status: 'queued' },
+        });
+      }
+    } catch {}
 
-    // Fire the execution asynchronously — IPC events will push progress to renderer
-    this._runAsync(
+    // Add to FIFO queue
+    this.queue.push({
       taskId,
-      worktree.path,
+      repoPath,
       prompt,
       model,
-      adapter,
-      worktreeManager,
-      abortController,
-      webContents
-    ).catch((err) => {
-      // Only reachable if _runAsync itself throws outside its own try/catch
-      console.error('[TaskRunner] Unhandled error in _runAsync:', err);
+      webContents,
+      baseBranch,
+    });
+
+    // Fire queue processor asynchronously
+    this.processQueue().catch((err) => {
+      console.error('[TaskRunner] Error processing queue after launch:', err);
     });
 
     return taskId;
   }
 
+  private async processQueue(): Promise<void> {
+    if (this.queueProcessing) return;
+    this.queueProcessing = true;
+
+    try {
+      while (this.queue.length > 0) {
+        const settings = loadSettings();
+        const cap = settings.concurrencyCap || 3;
+
+        if (this.activeTasks.size >= cap) {
+          break; // Cap reached, wait for running tasks to complete
+        }
+
+        // Calculate required stagger delay
+        const now = Date.now();
+        const elapsed = now - this.lastStartTimestamp;
+        const delay = Math.max(0, 300 - elapsed);
+        if (delay > 0) {
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+
+        // Re-check cap and queue in case they changed during the delay
+        if (this.queue.length === 0 || this.activeTasks.size >= cap) {
+          break;
+        }
+
+        const nextTask = this.queue.shift();
+        if (nextTask) {
+          // Double check if cancelled while waiting
+          const record = this.store.getTask(nextTask.taskId);
+          if (!record || record.task.status === 'cancelled') {
+            continue;
+          }
+
+          // Update last start time
+          this.lastStartTimestamp = Date.now();
+
+          // Start execution!
+          this._startTask(nextTask).catch((err) => {
+            console.error(`[TaskRunner] Failed to start task ${nextTask.taskId}:`, err);
+          });
+        }
+      }
+    } finally {
+      this.queueProcessing = false;
+    }
+  }
+
+  private async _startTask(task: QueuedTask): Promise<void> {
+    const { taskId, repoPath, prompt, model, webContents, baseBranch } = task;
+    const settings = loadSettings();
+    const worktreeRoot = settings.worktreeRoot;
+    if (!worktreeRoot) {
+      throw new Error('Worktree root is not configured in settings.');
+    }
+
+    const abortController = new AbortController();
+    const worktreePath = path.resolve(worktreeRoot, `task-${taskId}`);
+    const worktreeManager = new WorktreeManager(repoPath, worktreeRoot);
+
+    const activeEntry: ActiveTask = {
+      abortController,
+      wasCancelled: false,
+      worktreePath,
+      worktreeManager,
+    };
+    this.activeTasks.set(taskId, activeEntry);
+
+    try {
+      const binPath = settings.openCodePathOverride || undefined;
+      const adapter = new OpenCodeAdapter(binPath ? { binPath } : undefined);
+
+      // Create real git worktree
+      const worktree = await worktreeManager.create(taskId, baseBranch);
+
+      // Check if cancelled during worktree creation
+      if (activeEntry.wasCancelled || abortController.signal.aborted) {
+        // Clean up the worktree we just created
+        await worktreeManager.remove(worktree.path).catch(() => {});
+        throw new Error('Task was cancelled during startup');
+      }
+
+      // Update task status to 'running'
+      this.store.updateTaskStatus(taskId, 'running');
+
+      // Notify renderer that it is now running
+      try {
+        if (!webContents.isDestroyed()) {
+          webContents.send('murl:task-event', {
+            taskId,
+            event: { type: 'status', status: 'running' },
+          });
+        }
+      } catch {}
+
+      // Execute OpenCode run asynchronously
+      this._runAsync(
+        taskId,
+        worktree.path,
+        prompt,
+        model,
+        adapter,
+        worktreeManager,
+        abortController,
+        webContents
+      ).catch((err) => {
+        console.error('[TaskRunner] Unhandled error in _runAsync:', err);
+      });
+    } catch (err: any) {
+      console.error(`[TaskRunner] Startup of task ${taskId} failed:`, err);
+      
+      const wasCancelled = activeEntry.wasCancelled;
+      const status = wasCancelled ? 'cancelled' : 'failed';
+      
+      try {
+        this.store.updateTaskStatus(taskId, status, Date.now());
+      } catch (dbErr) {
+        console.error('[TaskRunner] Failed to update task status in DB:', dbErr);
+      }
+
+      try {
+        if (!webContents.isDestroyed()) {
+          if (wasCancelled) {
+            webContents.send('murl:task-cancelled', { taskId });
+          } else {
+            webContents.send('murl:task-failed', {
+              taskId,
+              error: err.message || String(err),
+            });
+          }
+        }
+      } catch {}
+
+      this.activeTasks.delete(taskId);
+
+      // Process next in queue
+      this.processQueue().catch((qErr) => {
+        console.error('[TaskRunner] Error processing queue after startup failure:', qErr);
+      });
+    }
+  }
+
   /**
-   * Triggers cancellation of an in-flight task. Sets wasCancelled=true first
-   * so the error path can write 'cancelled' (not 'failed') status.
+   * Triggers cancellation of an in-flight or queued task.
    */
   async cancel(taskId: string): Promise<void> {
+    // 1. Check if the task is currently in the queue
+    const queuedIdx = this.queue.findIndex((q) => q.taskId === taskId);
+    if (queuedIdx !== -1) {
+      const [queuedTask] = this.queue.splice(queuedIdx, 1);
+      // Mark cancelled
+      this.store.updateTaskStatus(taskId, 'cancelled', Date.now());
+      // Notify renderer
+      try {
+        if (queuedTask.webContents && !queuedTask.webContents.isDestroyed()) {
+          queuedTask.webContents.send('murl:task-cancelled', { taskId });
+        }
+      } catch {}
+      return;
+    }
+
+    // 2. Check if the task is actively running
     const entry = this.activeTasks.get(taskId);
     if (!entry) {
-      // Task may have already completed/failed — not an error
       return;
     }
     entry.wasCancelled = true;
@@ -122,11 +281,29 @@ export class TaskRunner {
   }
 
   getHistory(): PersistedTask[] {
-    return this.store.listTasks();
+    const list = this.store.listTasks();
+    return list.map((task) => {
+      if (task.status === 'queued') {
+        const idx = this.queue.findIndex((q) => q.taskId === task.taskId);
+        if (idx !== -1) {
+          return { ...task, queuePosition: idx };
+        }
+      }
+      return task;
+    });
   }
 
   getRecord(taskId: string): TaskRecord | null {
-    return this.store.getTask(taskId);
+    const record = this.store.getTask(taskId);
+    if (!record) return null;
+
+    if (record.task.status === 'queued') {
+      const idx = this.queue.findIndex((q) => q.taskId === taskId);
+      if (idx !== -1) {
+        record.task.queuePosition = idx;
+      }
+    }
+    return record;
   }
 
   async keep(taskId: string): Promise<{ success: boolean; message?: string }> {
@@ -340,6 +517,10 @@ export class TaskRunner {
       } catch {
         // Ignore stop errors
       }
+      // Process the next task in the queue
+      this.processQueue().catch((qErr) => {
+        console.error('[TaskRunner] Error processing queue after task execution:', qErr);
+      });
     }
   }
 }

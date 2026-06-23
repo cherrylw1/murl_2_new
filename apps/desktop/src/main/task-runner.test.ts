@@ -5,6 +5,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { TaskRunner } from './task-runner.js';
 import { TaskStore, OpenCodeAdapter } from '@murl/core';
+import * as settingsModule from './settings.js';
 
 const execAsync = promisify(exec);
 
@@ -34,16 +35,29 @@ describe('TaskRunner Keep Safety tests', () => {
 
   let runners: TaskRunner[] = [];
   let mockRunTaskDiff = '';
+  const taskResolvers = new Map<string, (val: any) => void>();
+  let isQueueTesting = false;
 
   beforeEach(async () => {
     runners = [];
     mockRunTaskDiff = '';
+    taskResolvers.clear();
+    isQueueTesting = false;
 
     // Spy on OpenCodeAdapter to prevent executing real subprocesses or making network calls
     vi.spyOn(OpenCodeAdapter.prototype, 'startServer').mockResolvedValue(undefined);
     vi.spyOn(OpenCodeAdapter.prototype, 'stopServer').mockResolvedValue(undefined);
-    vi.spyOn(OpenCodeAdapter.prototype, 'runTask').mockImplementation(async () => {
-      return { diff: mockRunTaskDiff };
+    vi.spyOn(OpenCodeAdapter.prototype, 'runTask').mockImplementation(async (worktreePath) => {
+      const folderName = path.basename(worktreePath);
+      const taskId = folderName.startsWith('task-') ? folderName.substring(5) : folderName;
+      return new Promise((resolve) => {
+        taskResolvers.set(taskId, resolve);
+        if (!isQueueTesting) {
+          process.nextTick(() => {
+            resolve({ events: [], diff: mockRunTaskDiff });
+          });
+        }
+      });
     });
 
     // Cleanup any leftovers and recreate fresh folders
@@ -70,17 +84,34 @@ describe('TaskRunner Keep Safety tests', () => {
   });
 
   afterEach(async () => {
-    // Give any pending async operations a brief moment to yield and finish
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // 1. Cancel all active tasks in runners to ensure no background git commands or processes are running
+    for (const runner of runners) {
+      try {
+        const activeIds = Array.from((runner as any).activeTasks.keys());
+        for (const id of activeIds) {
+          await runner.cancel(id as string).catch(() => {});
+        }
+      } catch {}
+    }
 
-    // Close all database connections first to release file locks on Windows
+    // 2. Resolve any remaining promises to allow async tasks to terminate cleanly
+    for (const resolve of taskResolvers.values()) {
+      try {
+        resolve({ events: [], diff: '' });
+      } catch {}
+    }
+
+    // 3. Give any pending async operations and cancellations a brief moment to yield and finish
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    // 4. Close all database connections first to release file locks on Windows
     for (const runner of runners) {
       try {
         (runner as any).store.close();
       } catch {}
     }
 
-    // Cleanup files
+    // 5. Cleanup files
     if (fs.existsSync(scratchDir)) {
       try {
         fs.rmSync(scratchDir, { recursive: true, force: true });
@@ -101,18 +132,28 @@ describe('TaskRunner Keep Safety tests', () => {
   async function waitForTaskCompletion(runner: TaskRunner, taskId: string): Promise<void> {
     for (let i = 0; i < 40; i++) {
       const record = runner.getRecord(taskId);
-      if (record && record.task.status !== 'running') {
+      if (record && record.task.status !== 'running' && record.task.status !== 'queued') {
         return;
       }
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
   }
 
+  async function waitForTaskRunning(runner: TaskRunner, taskId: string): Promise<void> {
+    for (let i = 0; i < 40; i++) {
+      const record = runner.getRecord(taskId);
+      if (record && (record.task.status === 'running' || record.task.status === 'completed')) {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error(`Timed out waiting for task ${taskId} to start running`);
+  }
+
   it('should successfully keep changes on a clean repository', async () => {
     const runner = new TaskRunner(dbPath);
     runners.push(runner);
 
-    // Mock webContents.send so launch() works asynchronously
     const mockWebContents: any = {
       isDestroyed: () => false,
       send: vi.fn(),
@@ -126,6 +167,9 @@ describe('TaskRunner Keep Safety tests', () => {
       mockWebContents,
       'main'
     );
+
+    // Wait for task queue to start task and create worktree
+    await waitForTaskRunning(runner, taskId);
 
     const record = runner.getRecord(taskId);
     expect(record).toBeDefined();
@@ -188,6 +232,9 @@ describe('TaskRunner Keep Safety tests', () => {
       'main'
     );
 
+    // Wait for task queue to start task and create worktree
+    await waitForTaskRunning(runner, taskId);
+
     const record = runner.getRecord(taskId);
     const worktreePath = record!.task.worktreePath;
 
@@ -233,6 +280,9 @@ describe('TaskRunner Keep Safety tests', () => {
       'main'
     );
 
+    // Wait for task queue to start task and create worktree
+    await waitForTaskRunning(runner, taskId);
+
     const record = runner.getRecord(taskId);
     const worktreePath = record!.task.worktreePath;
 
@@ -269,5 +319,114 @@ describe('TaskRunner Keep Safety tests', () => {
     expect(fs.existsSync(worktreePath)).toBe(true);
     const { stdout: branchList } = await execAsync('git branch', { cwd: baseRepoPath });
     expect(branchList).toContain(record!.task.branch);
+  });
+
+  it('should enforce concurrencyCap and queue additional tasks in FIFO order', async () => {
+    const runner = new TaskRunner(dbPath);
+    runners.push(runner);
+    isQueueTesting = true;
+
+    // Mock settings with concurrencyCap = 2
+    vi.spyOn(settingsModule, 'loadSettings').mockReturnValue({
+      provider: 'together',
+      model: 'test-model',
+      defaultRepoPath: baseRepoPath,
+      worktreeRoot: worktreesRoot,
+      concurrencyCap: 2,
+      openCodePathOverride: '',
+      perTaskBudgetDefault: 10,
+      recentRepos: [],
+    });
+
+    const mockWebContents: any = {
+      isDestroyed: () => false,
+      send: vi.fn(),
+    };
+
+    // 1. Launch 3 tasks in quick succession
+    const taskId1 = await runner.launch(baseRepoPath, 'Task 1', 'test-model', mockWebContents, 'main');
+    const taskId2 = await runner.launch(baseRepoPath, 'Task 2', 'test-model', mockWebContents, 'main');
+    const taskId3 = await runner.launch(baseRepoPath, 'Task 3', 'test-model', mockWebContents, 'main');
+
+    // Wait for task 1 and task 2 to start running (robust polling)
+    await waitForTaskRunning(runner, taskId1);
+    await waitForTaskRunning(runner, taskId2);
+
+    // Verify task 1 and task 2 are running
+    const record1 = runner.getRecord(taskId1);
+    const record2 = runner.getRecord(taskId2);
+    expect(record1!.task.status).toBe('running');
+    expect(record2!.task.status).toBe('running');
+
+    // Verify task 3 is queued
+    const record3 = runner.getRecord(taskId3);
+    expect(record3!.task.status).toBe('queued');
+    expect(record3!.task.queuePosition).toBe(0);
+
+    // Verify that only 2 worktrees exist on disk
+    const worktreePath3 = record3!.task.worktreePath;
+    expect(fs.existsSync(record1!.task.worktreePath)).toBe(true);
+    expect(fs.existsSync(record2!.task.worktreePath)).toBe(true);
+    expect(fs.existsSync(worktreePath3)).toBe(false);
+
+    // 2. Complete Task 1 by resolving its runTask promise
+    const resolve1 = taskResolvers.get(taskId1);
+    expect(resolve1).toBeDefined();
+    resolve1!({ events: [], diff: 'Task 1 diff' });
+
+    // Wait for the exit/cleanup path of Task 1 to trigger processQueue
+    await waitForTaskCompletion(runner, taskId1);
+
+    // Wait for stagger delay + start tick
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    // Verify Task 3 is now running and its worktree is created
+    const record3Running = runner.getRecord(taskId3);
+    expect(record3Running!.task.status).toBe('running');
+    expect(fs.existsSync(worktreePath3)).toBe(true);
+  });
+
+  it('should support instant cancellation of queued tasks', async () => {
+    const runner = new TaskRunner(dbPath);
+    runners.push(runner);
+    isQueueTesting = true;
+
+    // Mock settings with concurrencyCap = 1
+    vi.spyOn(settingsModule, 'loadSettings').mockReturnValue({
+      provider: 'together',
+      model: 'test-model',
+      defaultRepoPath: baseRepoPath,
+      worktreeRoot: worktreesRoot,
+      concurrencyCap: 1,
+      openCodePathOverride: '',
+      perTaskBudgetDefault: 10,
+      recentRepos: [],
+    });
+
+    const mockWebContents: any = {
+      isDestroyed: () => false,
+      send: vi.fn(),
+    };
+
+    // 1. Launch 2 tasks
+    const taskId1 = await runner.launch(baseRepoPath, 'Task 1', 'test-model', mockWebContents, 'main');
+    const taskId2 = await runner.launch(baseRepoPath, 'Task 2', 'test-model', mockWebContents, 'main');
+
+    // Wait for task 1 to start
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    // Verify task 2 is queued
+    const record2 = runner.getRecord(taskId2);
+    expect(record2!.task.status).toBe('queued');
+
+    // 2. Cancel the queued task 2
+    await runner.cancel(taskId2);
+
+    // Verify task 2 is marked cancelled
+    const record2Cancelled = runner.getRecord(taskId2);
+    expect(record2Cancelled!.task.status).toBe('cancelled');
+
+    // Verify no worktree was created for task 2
+    expect(fs.existsSync(record2!.task.worktreePath)).toBe(false);
   });
 });

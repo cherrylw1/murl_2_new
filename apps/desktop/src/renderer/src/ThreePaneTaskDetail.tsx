@@ -20,7 +20,7 @@ interface ThreePaneTaskDetailProps {
   task: Partial<PersistedTask>;
   events: MurlEvent[];
   diff: string;
-  runState: 'running' | 'completed' | 'failed' | 'cancelled' | 'idle';
+  runState: 'running' | 'completed' | 'failed' | 'cancelled' | 'idle' | 'queued';
   errorMessage?: string;
   onBack: () => void;
   onCancel?: () => void;
@@ -233,23 +233,28 @@ export default function ThreePaneTaskDetail({
                 className={`w-2 h-2 rounded-full transition-all duration-200 ${
                   runState === 'running'
                     ? 'bg-chalk shadow-active animate-breath'
-                    : runState === 'completed'
-                      ? 'bg-chalk shadow-active animate-breath'
-                      : runState === 'failed'
-                        ? 'bg-signal shadow-signal animate-pulse-signal'
-                        : 'bg-aluminium'
+                    : runState === 'queued'
+                      ? 'bg-aluminium/30'
+                      : runState === 'completed'
+                        ? 'bg-chalk shadow-active'
+                        : runState === 'failed'
+                          ? 'bg-signal shadow-signal animate-pulse-signal'
+                          : 'bg-aluminium'
                 }`}
               />
               <span
                 className={`text-label font-medium ${
-                  runState === 'failed' ? 'text-signal' : 'text-chalk'
+                  runState === 'failed' ? 'text-signal' :
+                  runState === 'queued' ? 'text-aluminium/50' : 'text-chalk'
                 }`}
               >
-                {runState.toUpperCase()}
+                {runState === 'queued' && task.queuePosition !== undefined
+                  ? `QUEUED (${task.queuePosition === 0 ? 'next' : `${task.queuePosition} ahead`})`
+                  : runState.toUpperCase()}
               </span>
             </div>
 
-            {onCancel && runState === 'running' && (
+            {onCancel && (runState === 'running' || runState === 'queued') && (
               <button
                 onClick={onCancel}
                 className="px-4 py-1.5 rounded bg-carbon border border-signal/40 text-label text-signal font-semibold hover:bg-signal/10 transition-taste"

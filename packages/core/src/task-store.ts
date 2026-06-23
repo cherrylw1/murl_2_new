@@ -21,6 +21,7 @@ export interface PersistedTask {
   createdAt: number;
   completedAt: number | null;
   outcome: 'kept' | 'discarded' | null;
+  queuePosition?: number;
 }
 
 export interface PersistedCost {

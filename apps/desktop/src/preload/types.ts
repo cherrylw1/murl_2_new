@@ -19,7 +19,7 @@ export interface HarnessSettings {
 // ─── Task event types (mirrors @murl/core — defined here so the renderer
 //     never imports core directly, which is unsafe in the renderer context) ────
 
-export type MurlTaskStatus = 'started' | 'running' | 'completed' | 'failed';
+export type MurlTaskStatus = 'queued' | 'started' | 'running' | 'completed' | 'failed';
 
 export interface MurlStatusEvent {
   type: 'status';
@@ -27,7 +27,7 @@ export interface MurlStatusEvent {
   error?: string;
 }
 
-export interface MurlMessageEvent {
+interface MurlMessageEvent {
   type: 'message';
   role: 'assistant' | 'user';
   contentType: 'text' | 'reasoning';
@@ -64,6 +64,7 @@ export interface PersistedTask {
   createdAt: number;
   completedAt: number | null;
   outcome: 'kept' | 'discarded' | null;
+  queuePosition?: number;
 }
 
 export interface TaskRecord {
