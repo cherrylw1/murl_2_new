@@ -1,3 +1,8 @@
+export interface RecentRepo {
+  path: string;
+  displayName: string;
+}
+
 export interface HarnessSettings {
   provider: string;
   model: string;
@@ -6,6 +11,7 @@ export interface HarnessSettings {
   concurrencyCap: number;
   openCodePathOverride: string;
   perTaskBudgetDefault: number;
+  recentRepos: RecentRepo[];
 }
 
 export interface MurlApi {
@@ -24,4 +30,9 @@ export interface MurlApi {
     success: boolean;
     message: string;
   }>;
+  pickRepoFolder(): Promise<string | null>;
+  validateRepo(path: string): Promise<{ valid: boolean; reason?: string }>;
+  getRecentRepos(): Promise<RecentRepo[]>;
+  addRecentRepo(path: string): Promise<RecentRepo[]>;
+  getRepoBranch(path: string): Promise<string>;
 }

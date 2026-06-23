@@ -1,14 +1,21 @@
-import { app, BrowserWindow, ipcMain, Menu, Tray } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, Tray, dialog } from 'electron';
 import { join } from 'path';
 import { noop } from '@murl/core';
+import * as fs from 'fs';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import {
   loadAndSetApiKey,
   loadSettings,
   saveSettings,
   saveApiKey,
   isApiKeyConfigured,
-  HarnessSettings
+  HarnessSettings,
+  addRecentRepo,
+  getRecentRepos
 } from './settings.js';
+
+const execAsync = promisify(exec);
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -107,6 +114,67 @@ ipcMain.handle('murl:health', async () => {
     coreAlive: true,
     message: 'Electron main is alive, @murl/core is reachable.'
   };
+});
+
+ipcMain.handle('murl:pickRepoFolder', async () => {
+  if (!mainWindow) return null;
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory']
+  });
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+  return result.filePaths[0];
+});
+
+ipcMain.handle('murl:validateRepo', async (_event, repoPath: string) => {
+  if (!repoPath) {
+    return { valid: false, reason: 'Path is empty.' };
+  }
+  
+  if (!fs.existsSync(repoPath)) {
+    return { valid: false, reason: 'Folder does not exist.' };
+  }
+  
+  try {
+    const stat = fs.statSync(repoPath);
+    if (!stat.isDirectory()) {
+      return { valid: false, reason: 'Path exists but is not a directory.' };
+    }
+  } catch {
+    return { valid: false, reason: 'Folder does not exist.' };
+  }
+
+  // Shell validation via git rev-parse --is-inside-work-tree
+  try {
+    const { stdout } = await execAsync('git rev-parse --is-inside-work-tree', { cwd: repoPath });
+    if (stdout.trim() === 'true') {
+      return { valid: true };
+    }
+    return { valid: false, reason: 'Folder exists but is not a git repository.' };
+  } catch (err: any) {
+    return { valid: false, reason: 'Folder exists but is not a git repository.' };
+  }
+});
+
+ipcMain.handle('murl:getRecentRepos', async () => {
+  return getRecentRepos();
+});
+
+ipcMain.handle('murl:addRecentRepo', async (_event, repoPath: string) => {
+  return addRecentRepo(repoPath);
+});
+
+ipcMain.handle('murl:getRepoBranch', async (_event, repoPath: string) => {
+  if (!repoPath || !fs.existsSync(repoPath)) {
+    return 'main';
+  }
+  try {
+    const { stdout } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: repoPath });
+    return stdout.trim();
+  } catch {
+    return 'main';
+  }
 });
 
 ipcMain.handle('murl:getSettingsStatus', async () => {

@@ -2,6 +2,11 @@ import { app, safeStorage } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 
+export interface RecentRepo {
+  path: string;
+  displayName: string;
+}
+
 export interface HarnessSettings {
   provider: string;
   model: string;
@@ -10,6 +15,7 @@ export interface HarnessSettings {
   concurrencyCap: number;
   openCodePathOverride: string;
   perTaskBudgetDefault: number;
+  recentRepos: RecentRepo[];
 }
 
 const SETTINGS_FILE_NAME = 'harness-settings.json';
@@ -32,6 +38,7 @@ export function getDefaultSettings(): HarnessSettings {
     concurrencyCap: 3,
     openCodePathOverride: '',
     perTaskBudgetDefault: 10.0,
+    recentRepos: [],
   };
 }
 
@@ -99,4 +106,46 @@ export function saveApiKey(apiKey: string): void {
 export function isApiKeyConfigured(): boolean {
   const filePath = getApiKeyPath();
   return fs.existsSync(filePath);
+}
+
+export function normalizePath(p: string): string {
+  let resolved = path.resolve(p).replace(/\\/g, '/');
+  if (resolved.endsWith('/') && !resolved.endsWith(':/')) {
+    resolved = resolved.slice(0, -1);
+  }
+  return resolved;
+}
+
+export function addRecentRepo(repoPath: string): RecentRepo[] {
+  const settings = loadSettings();
+  const normalizedTarget = normalizePath(repoPath);
+  const normalizedTargetLower = normalizedTarget.toLowerCase();
+
+  // Filter out duplicates (checking normalized, case-insensitive)
+  const list = (settings.recentRepos || []).filter(item => {
+    return normalizePath(item.path).toLowerCase() !== normalizedTargetLower;
+  });
+
+  const displayName = path.basename(normalizedTarget) || normalizedTarget;
+  
+  // Add new one to the front
+  list.unshift({
+    path: normalizedTarget,
+    displayName
+  });
+
+  // Limit list to 10 items
+  const updatedList = list.slice(0, 10);
+  
+  saveSettings({
+    ...settings,
+    recentRepos: updatedList
+  });
+
+  return updatedList;
+}
+
+export function getRecentRepos(): RecentRepo[] {
+  const settings = loadSettings();
+  return settings.recentRepos || [];
 }

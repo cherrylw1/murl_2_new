@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { HarnessSettings } from '../../preload/types.js';
+import { HarnessSettings, RecentRepo } from '../../preload/types.js';
 
 interface HealthStatus {
   status: string;
@@ -13,6 +13,16 @@ export default function App(): React.JSX.Element {
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabType>('tasks');
+
+  // Tasks launcher state
+  const [recentRepos, setRecentRepos] = useState<RecentRepo[]>([]);
+  const [activeRepo, setActiveRepo] = useState<RecentRepo | null>(null);
+  const [isCreatingTask, setIsCreatingTask] = useState<boolean>(false);
+  const [taskDescription, setTaskDescription] = useState<string>('');
+  const [taskBranch, setTaskBranch] = useState<string>('');
+  const [taskModel, setTaskModel] = useState<string>('');
+  const [launchStatus, setLaunchStatus] = useState<'idle' | 'ready'>('idle');
+  const [launcherError, setLauncherError] = useState<string | null>(null);
 
   // Harness Settings State
   const [apiKeyConfigured, setApiKeyConfigured] = useState<boolean>(false);
@@ -41,6 +51,8 @@ export default function App(): React.JSX.Element {
         setConcurrencyCap(settings.concurrencyCap);
         setOpenCodePathOverride(settings.openCodePathOverride);
         setPerTaskBudgetDefault(settings.perTaskBudgetDefault);
+        setRecentRepos(settings.recentRepos || []);
+        setTaskModel(settings.model);
       })
       .catch((err) => {
         setError(err.message || String(err));
@@ -75,7 +87,8 @@ export default function App(): React.JSX.Element {
         worktreeRoot,
         concurrencyCap: Number(concurrencyCap),
         openCodePathOverride,
-        perTaskBudgetDefault: Number(perTaskBudgetDefault)
+        perTaskBudgetDefault: Number(perTaskBudgetDefault),
+        recentRepos
       });
       setSaveStatus('success');
       setTimeout(() => setSaveStatus('idle'), 3000);
@@ -102,6 +115,60 @@ export default function App(): React.JSX.Element {
       setTestStatus('error');
       setTestMessage(err.message || String(err));
     }
+  };
+
+  const handleImportRepo = async () => {
+    setLauncherError(null);
+    try {
+      const folderPath = await window.murl.pickRepoFolder();
+      if (!folderPath) {
+        return;
+      }
+      
+      const validation = await window.murl.validateRepo(folderPath);
+      if (!validation.valid) {
+        setLauncherError(validation.reason || 'Invalid repository folder.');
+        return;
+      }
+      
+      const updatedList = await window.murl.addRecentRepo(folderPath);
+      setRecentRepos(updatedList);
+      
+      const display = folderPath.split(/[/\\]/).pop() || folderPath;
+      const imported = { path: folderPath, displayName: display };
+      setActiveRepo(imported);
+      setIsCreatingTask(true);
+      
+      const branchName = await window.murl.getRepoBranch(folderPath);
+      setTaskBranch(branchName);
+      
+    } catch (err: any) {
+      setLauncherError(err.message || String(err));
+    }
+  };
+
+  const handleSelectRecentRepo = async (repo: RecentRepo) => {
+    setLauncherError(null);
+    setActiveRepo(repo);
+    try {
+      const branchName = await window.murl.getRepoBranch(repo.path);
+      setTaskBranch(branchName);
+    } catch (err: any) {
+      setTaskBranch('main');
+    }
+  };
+
+  const handleLaunchTask = () => {
+    setLauncherError(null);
+    if (!activeRepo) {
+      setLauncherError('Please select or import a git repository first.');
+      return;
+    }
+    if (!taskDescription.trim()) {
+      setLauncherError('Please enter a description of the task.');
+      return;
+    }
+    setLaunchStatus('ready');
   };
 
   const healthState = error ? 'error' : health ? 'active' : 'idle';
@@ -215,28 +282,255 @@ export default function App(): React.JSX.Element {
           {/* Active Tab Contents */}
           <div className="flex-1 flex flex-col">
             {activeTab === 'tasks' && (
-              <div className="flex-1 flex flex-col justify-between">
-                <div>
-                  <div className="text-label text-aluminium mb-1">CURRENT AREA</div>
-                  <h2 className="text-title text-chalk mb-6">Task Queue</h2>
-                  
-                  {/* Empty state aligned to design.md */}
-                  <div className="flex flex-col items-center justify-center border border-dashed border-aluminium/10 rounded-lg py-16 px-4 bg-carbon/20">
-                    <p className="text-data text-aluminium text-center max-w-sm">
-                      No active tasks. Load a recipe or create a new task to begin.
-                    </p>
+              <div className="flex-1 flex flex-col justify-between h-full overflow-hidden">
+                {launchStatus === 'ready' ? (
+                  /* Ready to launch confirmation well */
+                  <div className="flex-1 flex flex-col justify-between">
+                    <div className="flex-1 overflow-y-auto pr-2 min-h-0 flex flex-col gap-6 max-w-xl">
+                      <div>
+                        <div className="text-label text-aluminium mb-1">CURRENT AREA</div>
+                        <h2 className="text-title text-chalk mb-6 font-semibold">Task Preparation</h2>
+                      </div>
+                      
+                      <div className="flex flex-col gap-4 border border-aluminium/20 rounded-lg p-6 bg-well shadow-active">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2.5 h-2.5 rounded-full bg-chalk shadow-active animate-breath" />
+                          <span className="text-label text-chalk tracking-wider font-semibold">TASK CONSTITUTED</span>
+                        </div>
+                        <p className="text-body text-chalk/90">
+                          The task environment has been prepared and is ready for launch.
+                        </p>
+                        
+                        <div className="flex flex-col gap-3 bg-carbon/50 p-4 rounded border border-aluminium/10 font-mono text-xs text-aluminium/80">
+                          <div>
+                            <span className="text-chalk font-semibold uppercase tracking-wider block text-[10px] mb-1">REPOSITORY</span> 
+                            <span className="text-data break-all">{activeRepo?.path}</span>
+                          </div>
+                          <div>
+                            <span className="text-chalk font-semibold uppercase tracking-wider block text-[10px] mb-1">BRANCH</span> 
+                            <span className="text-data">{taskBranch}</span>
+                          </div>
+                          <div>
+                            <span className="text-chalk font-semibold uppercase tracking-wider block text-[10px] mb-1">MODEL</span> 
+                            <span className="text-data">{taskModel}</span>
+                          </div>
+                          <div className="border-t border-aluminium/10 pt-3">
+                            <span className="text-chalk font-semibold uppercase tracking-wider block text-[10px] mb-1">PROMPT</span>
+                            <span className="text-body text-chalk/90 break-words whitespace-pre-wrap">{taskDescription}</span>
+                          </div>
+                        </div>
+                        
+                        <p className="text-xs text-aluminium/60 italic mt-2">
+                          Note: Task execution (worktree instantiation and OpenCode adapter serving) will be fully wired in Phase 2.2.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-4 border-t border-aluminium/10 pt-6 mt-6">
+                      <button 
+                        onClick={() => {
+                          setLaunchStatus('idle');
+                          setIsCreatingTask(false);
+                          setTaskDescription('');
+                        }}
+                        className="px-6 py-2.5 rounded bg-carbon border border-aluminium/20 text-body text-chalk font-semibold hover:shadow-active transition-taste"
+                      >
+                        Reset / Back
+                      </button>
+                    </div>
                   </div>
-                </div>
-                
-                {/* Standard buttons layout */}
-                <div className="flex gap-4 border-t border-aluminium/10 pt-6">
-                  <button className="px-6 py-2.5 rounded bg-carbon border border-aluminium/20 text-body text-chalk font-semibold hover:shadow-active transition-taste">
-                    Create Task
-                  </button>
-                  <button className="px-6 py-2.5 rounded bg-transparent border border-aluminium/15 text-body text-aluminium hover:text-chalk hover:border-aluminium/30 transition-taste">
-                    Import Repo
-                  </button>
-                </div>
+                ) : isCreatingTask ? (
+                  /* Create Task Form */
+                  <div className="flex-1 flex flex-col justify-between h-full overflow-hidden">
+                    <div className="flex-1 overflow-y-auto pr-2 min-h-0 flex flex-col gap-6 max-w-xl">
+                      <div>
+                        <div className="text-label text-aluminium mb-1">CURRENT AREA</div>
+                        <h2 className="text-title text-chalk mb-6 font-semibold">Create Coding Task</h2>
+                      </div>
+
+                      {launcherError && (
+                        <div className="bg-carbon/50 border border-signal/30 p-4 rounded flex items-center gap-3">
+                          <div className="w-2 h-2 rounded-full bg-signal shadow-signal animate-pulse-signal" />
+                          <span className="text-data text-signal text-xs">{launcherError}</span>
+                        </div>
+                      )}
+
+                      {/* Repository Selector */}
+                      <div className="flex flex-col gap-2">
+                        <label className="text-label text-aluminium">Git Repository</label>
+                        <div className="flex gap-3">
+                          <select
+                            value={activeRepo ? activeRepo.path : ''}
+                            onChange={(e) => {
+                              const found = recentRepos.find(r => r.path === e.target.value);
+                              if (found) {
+                                handleSelectRecentRepo(found);
+                              } else {
+                                setActiveRepo(null);
+                              }
+                            }}
+                            className="flex-1 bg-well border border-aluminium/20 rounded p-2.5 text-data text-chalk focus:border-chalk outline-none cursor-pointer"
+                          >
+                            <option value="">-- Select a Repository --</option>
+                            {recentRepos.map((repo) => (
+                              <option key={repo.path} value={repo.path}>
+                                {repo.displayName} ({repo.path})
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            onClick={handleImportRepo}
+                            className="px-4 py-2 rounded bg-carbon border border-aluminium/20 text-label text-chalk hover:shadow-active transition-taste whitespace-nowrap"
+                          >
+                            Import Repo
+                          </button>
+                        </div>
+                      </div>
+
+                      {activeRepo && (
+                        <>
+                          {/* Task Description */}
+                          <div className="flex flex-col gap-2">
+                            <label className="text-label text-aluminium">Task Description (Prompt)</label>
+                            <textarea
+                              value={taskDescription}
+                              onChange={(e) => setTaskDescription(e.target.value)}
+                              placeholder="e.g. Add a function capitalize(str) and write a vitest file to verify it..."
+                              rows={5}
+                              className="bg-well border border-aluminium/20 rounded p-2.5 text-body text-chalk focus:border-chalk outline-none resize-none"
+                            />
+                          </div>
+
+                          {/* Base Branch */}
+                          <div className="flex flex-col gap-2">
+                            <label className="text-label text-aluminium">Base Branch</label>
+                            <input
+                              type="text"
+                              value={taskBranch}
+                              onChange={(e) => setTaskBranch(e.target.value)}
+                              className="bg-well border border-aluminium/20 rounded p-2.5 text-data text-chalk focus:border-chalk outline-none"
+                            />
+                          </div>
+
+                          {/* Model Override */}
+                          <div className="flex flex-col gap-2">
+                            <label className="text-label text-aluminium">Model</label>
+                            <input
+                              type="text"
+                              value={taskModel}
+                              onChange={(e) => setTaskModel(e.target.value)}
+                              list="together-models-override"
+                              className="bg-well border border-aluminium/20 rounded p-2.5 text-data text-chalk focus:border-chalk outline-none"
+                            />
+                            <datalist id="together-models-override">
+                              <option value="meta-llama/Llama-3.3-70B-Instruct-Turbo" />
+                              <option value="meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo" />
+                              <option value="Qwen/Qwen2.5-72B-Instruct-Turbo" />
+                              <option value="deepseek-ai/DeepSeek-V3" />
+                            </datalist>
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    <div className="flex gap-4 border-t border-aluminium/10 pt-6 mt-6">
+                      {activeRepo ? (
+                        <>
+                          <button
+                            onClick={handleLaunchTask}
+                            className="px-6 py-2.5 rounded bg-carbon border border-aluminium/20 text-body text-chalk font-semibold hover:shadow-active transition-taste"
+                          >
+                            Launch Task
+                          </button>
+                          <button
+                            onClick={() => {
+                              setIsCreatingTask(false);
+                              setActiveRepo(null);
+                            }}
+                            className="px-6 py-2.5 rounded bg-transparent border border-aluminium/15 text-body text-aluminium hover:text-chalk hover:border-aluminium/30 transition-taste"
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            setIsCreatingTask(false);
+                          }}
+                          className="px-6 py-2.5 rounded bg-transparent border border-aluminium/15 text-body text-aluminium hover:text-chalk hover:border-aluminium/30 transition-taste"
+                        >
+                          Back
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  /* Standard Queue view / Recents list */
+                  <div className="flex-1 flex flex-col justify-between">
+                    <div>
+                      <div className="text-label text-aluminium mb-1">CURRENT AREA</div>
+                      <h2 className="text-title text-chalk mb-6 font-semibold">Task Queue</h2>
+                      
+                      {launcherError && (
+                        <div className="bg-carbon/50 border border-signal/30 p-4 rounded flex items-center gap-3 mb-6 max-w-xl">
+                          <div className="w-2 h-2 rounded-full bg-signal shadow-signal animate-pulse-signal" />
+                          <span className="text-data text-signal text-xs">{launcherError}</span>
+                        </div>
+                      )}
+
+                      {recentRepos.length > 0 ? (
+                        <div className="flex flex-col gap-4">
+                          <div className="text-label text-aluminium/60 font-semibold mb-1">KNOWN REPOSITORIES</div>
+                          <div className="flex flex-col gap-3 max-w-xl">
+                            {recentRepos.map((repo) => (
+                              <div key={repo.path} className="flex justify-between items-center p-4 bg-carbon/40 rounded border border-aluminium/10">
+                                <div className="truncate pr-4">
+                                  <div className="text-body font-semibold text-chalk">{repo.displayName}</div>
+                                  <div className="text-data text-aluminium text-xs mt-1 truncate">{repo.path}</div>
+                                </div>
+                                <button
+                                  onClick={() => {
+                                    handleSelectRecentRepo(repo);
+                                    setIsCreatingTask(true);
+                                  }}
+                                  className="px-4 py-1.5 rounded bg-carbon border border-aluminium/20 text-label text-chalk hover:shadow-active transition-taste whitespace-nowrap"
+                                >
+                                  Create Task
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col items-center justify-center border border-dashed border-aluminium/10 rounded-lg py-16 px-4 bg-carbon/20 max-w-xl">
+                          <p className="text-data text-aluminium text-center max-w-sm">
+                            No active tasks. Load a recipe or import a repository to begin.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                    
+                    <div className="flex gap-4 border-t border-aluminium/10 pt-6 mt-6">
+                      <button 
+                        onClick={() => {
+                          if (recentRepos.length > 0) {
+                            handleSelectRecentRepo(recentRepos[0]);
+                          }
+                          setIsCreatingTask(true);
+                        }}
+                        className="px-6 py-2.5 rounded bg-carbon border border-aluminium/20 text-body text-chalk font-semibold hover:shadow-active transition-taste"
+                      >
+                        Create Task
+                      </button>
+                      <button 
+                        onClick={handleImportRepo}
+                        className="px-6 py-2.5 rounded bg-transparent border border-aluminium/15 text-body text-aluminium hover:text-chalk hover:border-aluminium/30 transition-taste"
+                      >
+                        Import Repo
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
