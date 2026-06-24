@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   HarnessSettings,
   MurlEvent,
@@ -11,6 +11,7 @@ import {
   TaskRecord,
 } from '../../preload/types.js';
 import ThreePaneTaskDetail from './ThreePaneTaskDetail.js';
+import GlyphWall from './GlyphWall.js';
 
 // ─── Local types ──────────────────────────────────────────────────────────────
 
@@ -23,9 +24,20 @@ interface HealthStatus {
 type TabType = 'tasks' | 'recipes' | 'history' | 'settings';
 type TaskRunState = 'idle' | 'running' | 'completed' | 'failed' | 'cancelled' | 'queued';
 
-// ─── Event log renderer ───────────────────────────────────────────────────────
 
-// renderEvent moved to ThreePaneTaskDetail.tsx
+// ─── Active-grid transition rule ──────────────────────────────────────────────
+// A task is "active" (shown in the dashboard grid) if:
+//   running | queued
+//   completed AND outcome === null (pending keep/discard decision)
+//   failed | cancelled AND NOT in dismissedTaskIds
+// Once decided (outcome !== null) it lives in History only.
+
+function isActiveTask(t: PersistedTask, dismissed: Set<string>): boolean {
+  if (t.status === 'running' || t.status === 'queued') return true;
+  if (t.status === 'completed' && t.outcome === null) return true;
+  if ((t.status === 'failed' || t.status === 'cancelled') && !dismissed.has(t.taskId)) return true;
+  return false;
+}
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
@@ -38,19 +50,25 @@ export default function App(): React.JSX.Element {
   // Launcher / repo selection
   const [recentRepos, setRecentRepos] = useState<RecentRepo[]>([]);
   const [activeRepo, setActiveRepo] = useState<RecentRepo | null>(null);
-  const [isCreatingTask, setIsCreatingTask] = useState<boolean>(false);
   const [taskDescription, setTaskDescription] = useState<string>('');
   const [taskBranch, setTaskBranch] = useState<string>('');
   const [taskModel, setTaskModel] = useState<string>('');
   const [launcherError, setLauncherError] = useState<string | null>(null);
+  const [isLaunching, setIsLaunching] = useState<boolean>(false);
 
-  // Task execution state
-  const [taskRunState, setTaskRunState] = useState<TaskRunState>('idle');
-  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
-  const [liveEvents, setLiveEvents] = useState<MurlEvent[]>([]);
-  const [taskDiff, setTaskDiff] = useState<string>('');
-  const [taskError, setTaskError] = useState<string>('');
+  // Dashboard / grid state
   const [taskHistory, setTaskHistory] = useState<PersistedTask[]>([]);
+  const [dismissedTaskIds, setDismissedTaskIds] = useState<Set<string>>(new Set());
+  const [tickNow, setTickNow] = useState<number>(Date.now());
+
+  // Inspecting a task (detail view opened from grid tile)
+  const [inspectingTaskId, setInspectingTaskId] = useState<string | null>(null);
+  const [inspectingRecord, setInspectingRecord] = useState<TaskRecord | null>(null);
+  const [inspectingLiveEvents, setInspectingLiveEvents] = useState<MurlEvent[]>([]);
+  const [inspectingDiff, setInspectingDiff] = useState<string>('');
+  const [inspectingError, setInspectingError] = useState<string>('');
+
+  // History tab (separate navigation context)
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedTaskRecord, setSelectedTaskRecord] = useState<TaskRecord | null>(null);
 
@@ -68,7 +86,9 @@ export default function App(): React.JSX.Element {
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [testMessage, setTestMessage] = useState<string>('');
 
-  // eventLogBottomRef is now in ThreePaneTaskDetail.tsx
+  // Ref for current inspecting task id — avoids stale closure in event handlers
+  const inspectingTaskIdRef = useRef<string | null>(null);
+  inspectingTaskIdRef.current = inspectingTaskId;
 
   // ─── Data fetchers ──────────────────────────────────────────────────────────
 
@@ -105,43 +125,52 @@ export default function App(): React.JSX.Element {
     fetchTaskHistory();
   }, [fetchSettings, fetchTaskHistory]);
 
-  // ─── Push-event subscriptions ───────────────────────────────────────────────
+  // ─── Ticking elapsed timer (1 s resolution) ─────────────────────────────────
 
   useEffect(() => {
-    if (!activeTaskId) return;
+    const id = setInterval(() => setTickNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
+  // ─── Push-event subscriptions (all tasks, not just one) ─────────────────────
+
+  useEffect(() => {
     const handleEvent = (payload: TaskEventPayload) => {
-      if (payload.taskId !== activeTaskId) return;
-      setLiveEvents((prev) => [...prev, payload.event]);
-      if (payload.event.type === 'status') {
-        if (payload.event.status === 'queued') {
-          setTaskRunState('queued');
-          fetchTaskHistory();
-        } else if (payload.event.status === 'started' || payload.event.status === 'running') {
-          setTaskRunState('running');
-          fetchTaskHistory();
-        }
+      // Always refresh the grid so statuses + queue positions update live
+      fetchTaskHistory();
+      // Stream into the detail view if this is the currently inspected task
+      if (payload.taskId === inspectingTaskIdRef.current) {
+        setInspectingLiveEvents((prev) => [...prev, payload.event]);
       }
     };
 
     const handleComplete = (payload: TaskCompletePayload) => {
-      if (payload.taskId !== activeTaskId) return;
-      setTaskDiff(payload.diff);
-      setTaskRunState('completed');
       fetchTaskHistory();
+      if (payload.taskId === inspectingTaskIdRef.current) {
+        setInspectingDiff(payload.diff);
+        window.murl.getTaskRecord(payload.taskId)
+          .then((r) => { if (r) setInspectingRecord(r); })
+          .catch(() => {});
+      }
     };
 
     const handleFailed = (payload: TaskFailedPayload) => {
-      if (payload.taskId !== activeTaskId) return;
-      setTaskError(payload.error);
-      setTaskRunState('failed');
       fetchTaskHistory();
+      if (payload.taskId === inspectingTaskIdRef.current) {
+        setInspectingError(payload.error);
+        window.murl.getTaskRecord(payload.taskId)
+          .then((r) => { if (r) setInspectingRecord(r); })
+          .catch(() => {});
+      }
     };
 
     const handleCancelled = (payload: TaskCancelledPayload) => {
-      if (payload.taskId !== activeTaskId) return;
-      setTaskRunState('cancelled');
       fetchTaskHistory();
+      if (payload.taskId === inspectingTaskIdRef.current) {
+        window.murl.getTaskRecord(payload.taskId)
+          .then((r) => { if (r) setInspectingRecord(r); })
+          .catch(() => {});
+      }
     };
 
     window.murl.onTaskEvent(handleEvent);
@@ -155,9 +184,7 @@ export default function App(): React.JSX.Element {
       window.murl.offTaskFailed(handleFailed);
       window.murl.offTaskCancelled(handleCancelled);
     };
-  }, [activeTaskId, fetchTaskHistory]);
-
-  // Auto-scroll is handled by ThreePaneTaskDetail.tsx
+  }, [fetchTaskHistory]);
 
   // ─── Handlers ───────────────────────────────────────────────────────────────
 
@@ -212,7 +239,6 @@ export default function App(): React.JSX.Element {
       setRecentRepos(updatedList);
       const display = folderPath.split(/[/\\]/).pop() || folderPath;
       setActiveRepo({ path: folderPath, displayName: display });
-      setIsCreatingTask(true);
       const branchName = await window.murl.getRepoBranch(folderPath);
       setTaskBranch(branchName);
     } catch (err: unknown) {
@@ -241,47 +267,88 @@ export default function App(): React.JSX.Element {
       setLauncherError('Please enter a description of the task.');
       return;
     }
+    setIsLaunching(true);
     try {
-      setLiveEvents([]);
-      setTaskDiff('');
-      setTaskError('');
-      const taskId = await window.murl.launchTask(activeRepo.path, taskDescription, taskModel, taskBranch);
-      setActiveTaskId(taskId);
-      const record = await window.murl.getTaskRecord(taskId);
-      if (record) {
-        setTaskRunState(record.task.status as any);
-      } else {
-        setTaskRunState('running');
-      }
+      await window.murl.launchTask(activeRepo.path, taskDescription, taskModel, taskBranch);
+      // Clear the prompt after a successful launch so the form is ready for the next task
+      setTaskDescription('');
+      fetchTaskHistory();
     } catch (err: unknown) {
       setLauncherError((err as Error).message || String(err));
+    } finally {
+      setIsLaunching(false);
     }
   };
 
-  const handleCancelTask = async () => {
-    if (!activeTaskId) return;
+  // Open a task in the full detail pane (from a grid tile click)
+  const handleInspectTask = async (taskId: string) => {
     try {
-      await window.murl.cancelTask(activeTaskId);
-    } catch (err: unknown) {
-      console.error('Failed to send cancel:', (err as Error).message);
+      const record = await window.murl.getTaskRecord(taskId);
+      if (!record) return;
+      setInspectingTaskId(taskId);
+      setInspectingRecord(record);
+      setInspectingLiveEvents(record.events || []);
+      setInspectingDiff(record.diff || '');
+      setInspectingError(
+        record.task.status === 'failed'
+          ? ((record.events.find((e) => e.type === 'status' && (e as any).error) as any)?.error || 'Task failed')
+          : ''
+      );
+    } catch (err) {
+      console.error('Failed to load task record:', err);
     }
   };
 
-  const resetToQueue = () => {
-    setTaskRunState('idle');
-    setActiveTaskId(null);
-    setLiveEvents([]);
-    setTaskDiff('');
-    setTaskError('');
-    setIsCreatingTask(false);
-    setActiveRepo(null);
-    setTaskDescription('');
-    setLauncherError(null);
+  // Back from detail pane to dashboard
+  const handleBackToDashboard = () => {
+    setInspectingTaskId(null);
+    setInspectingRecord(null);
+    setInspectingLiveEvents([]);
+    setInspectingDiff('');
+    setInspectingError('');
+    fetchTaskHistory();
+  };
+
+  const handleDismissTask = (taskId: string) => {
+    setDismissedTaskIds((prev) => new Set([...prev, taskId]));
+  };
+
+  const handleCancelTaskFromGrid = async (taskId: string) => {
+    try {
+      await window.murl.cancelTask(taskId);
+    } catch (err: unknown) {
+      console.error('Failed to cancel task:', (err as Error).message);
+    }
   };
 
   // ─── Derived state ──────────────────────────────────────────────────────────
 
   const healthState = error ? 'error' : health ? 'active' : 'idle';
+
+  // Sort: running first, queued, completed-pending, then terminal
+  const statusOrder: Record<string, number> = {
+    running: 0, queued: 1, completed: 2, failed: 3, cancelled: 4,
+  };
+  const activeTasks = taskHistory
+    .filter((t) => isActiveTask(t, dismissedTaskIds))
+    .sort((a, b) => (statusOrder[a.status] ?? 5) - (statusOrder[b.status] ?? 5));
+
+  const runningCount = taskHistory.filter((t) => t.status === 'running').length;
+  const queuedCount  = taskHistory.filter((t) => t.status === 'queued').length;
+  const doneCount    = taskHistory.filter(
+    (t) => t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled'
+  ).length;
+
+  // Live run-state for the inspected task (derived from taskHistory, not stale state)
+  const inspectingTaskLive = inspectingTaskId
+    ? taskHistory.find((t) => t.taskId === inspectingTaskId)
+    : null;
+  const inspectingRunState: TaskRunState = (inspectingTaskLive?.status as TaskRunState) ?? 'idle';
+
+  // History tab shows everything that has a final outcome OR is not running/queued
+  const historyTasks = taskHistory.filter(
+    (t) => t.outcome !== null || (t.status !== 'running' && t.status !== 'queued')
+  );
 
   // ─── Render ─────────────────────────────────────────────────────────────────
 
@@ -355,218 +422,169 @@ export default function App(): React.JSX.Element {
         </nav>
 
         {/* Workspace panel */}
-        <section className="panel flex-1 p-8 flex flex-col justify-between overflow-y-auto">
-          <div className="flex-1 flex flex-col">
+        <section className="panel flex-1 flex flex-col overflow-hidden">
+          <div className="flex-1 flex flex-col overflow-hidden">
 
             {/* ── TASKS TAB ───────────────────────────────────────────────── */}
             {activeTab === 'tasks' && (
-              <div className="flex-1 flex flex-col justify-between h-full overflow-hidden">
 
-                {/* 3-PANE TASK DETAIL VIEW */}
-                {taskRunState !== 'idle' ? (
+              /* ── DETAIL VIEW (tile was clicked) ── */
+              inspectingTaskId && inspectingRecord ? (
+                <div className="flex-1 flex flex-col justify-between h-full overflow-hidden p-8">
                   <ThreePaneTaskDetail
-                    task={{
-                      taskId: activeTaskId || undefined,
-                      prompt: taskDescription,
-                      model: taskModel,
-                      branch: taskBranch,
-                    }}
-                    events={liveEvents}
-                    diff={taskDiff}
-                    runState={taskRunState}
-                    errorMessage={taskError}
-                    onBack={resetToQueue}
-                    onCancel={(taskRunState === 'running' || taskRunState === 'queued') ? handleCancelTask : undefined}
+                    task={inspectingRecord.task}
+                    events={inspectingLiveEvents}
+                    diff={inspectingDiff}
+                    runState={inspectingRunState}
+                    errorMessage={inspectingError || undefined}
+                    onBack={handleBackToDashboard}
+                    onCancel={
+                      inspectingRunState === 'running' || inspectingRunState === 'queued'
+                        ? async () => { await handleCancelTaskFromGrid(inspectingTaskId); }
+                        : undefined
+                    }
                   />
-                ) : null}
+                </div>
+              ) : (
 
-                {/* CREATE TASK FORM */}
-                {taskRunState === 'idle' && isCreatingTask && (
-                  <div className="flex-1 flex flex-col justify-between h-full overflow-hidden">
-                    <div className="flex-1 overflow-y-auto pr-2 min-h-0 flex flex-col gap-6 max-w-xl">
-                      <div>
-                        <div className="text-label text-aluminium mb-1">CURRENT AREA</div>
-                        <h2 className="text-title text-chalk mb-6 font-semibold">Create Coding Task</h2>
-                      </div>
+              /* ── DASHBOARD (default landing surface) ── */
+              <div className="flex-1 flex overflow-hidden h-full">
 
-                      {launcherError && (
-                        <div className="bg-carbon/50 border border-signal/30 p-4 rounded flex items-center gap-3">
-                          <div className="w-2 h-2 rounded-full bg-signal shadow-signal animate-pulse-signal" />
-                          <span className="text-data text-signal text-xs">{launcherError}</span>
-                        </div>
-                      )}
-
-                      {/* Repository selector */}
-                      <div className="flex flex-col gap-2">
-                        <label className="text-label text-aluminium">Git Repository</label>
-                        <div className="flex gap-3">
-                          <select
-                            value={activeRepo ? activeRepo.path : ''}
-                            onChange={(e) => {
-                              const found = recentRepos.find((r) => r.path === e.target.value);
-                              if (found) handleSelectRecentRepo(found);
-                              else setActiveRepo(null);
-                            }}
-                            className="flex-1 bg-well border border-aluminium/20 rounded p-2.5 text-data text-chalk focus:border-chalk outline-none cursor-pointer"
-                          >
-                            <option value="">-- Select a Repository --</option>
-                            {recentRepos.map((repo) => (
-                              <option key={repo.path} value={repo.path}>
-                                {repo.displayName} ({repo.path})
-                              </option>
-                            ))}
-                          </select>
-                          <button
-                            onClick={handleImportRepo}
-                            className="px-4 py-2 rounded bg-carbon border border-aluminium/20 text-label text-chalk hover:shadow-active transition-taste whitespace-nowrap"
-                          >
-                            Import Repo
-                          </button>
-                        </div>
-                      </div>
-
-                      {activeRepo && (
-                        <>
-                          {/* Task description */}
-                          <div className="flex flex-col gap-2">
-                            <label className="text-label text-aluminium">Task Description (Prompt)</label>
-                            <textarea
-                              value={taskDescription}
-                              onChange={(e) => setTaskDescription(e.target.value)}
-                              placeholder="e.g. Add a function capitalize(str) and write a vitest test to verify it…"
-                              rows={5}
-                              className="bg-well border border-aluminium/20 rounded p-2.5 text-body text-chalk focus:border-chalk outline-none resize-none"
-                            />
-                          </div>
-
-                          {/* Base branch */}
-                          <div className="flex flex-col gap-2">
-                            <label className="text-label text-aluminium">Base Branch</label>
-                            <input
-                              type="text"
-                              value={taskBranch}
-                              onChange={(e) => setTaskBranch(e.target.value)}
-                              className="bg-well border border-aluminium/20 rounded p-2.5 text-data text-chalk focus:border-chalk outline-none"
-                            />
-                          </div>
-
-                          {/* Model override */}
-                          <div className="flex flex-col gap-2">
-                            <label className="text-label text-aluminium">Model</label>
-                            <input
-                              type="text"
-                              value={taskModel}
-                              onChange={(e) => setTaskModel(e.target.value)}
-                              list="together-models-override"
-                              className="bg-well border border-aluminium/20 rounded p-2.5 text-data text-chalk focus:border-chalk outline-none"
-                            />
-                            <datalist id="together-models-override">
-                              <option value="meta-llama/Llama-3.3-70B-Instruct-Turbo" />
-                              <option value="meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo" />
-                              <option value="Qwen/Qwen2.5-72B-Instruct-Turbo" />
-                              <option value="deepseek-ai/DeepSeek-V3" />
-                            </datalist>
-                          </div>
-                        </>
-                      )}
-                    </div>
-
-                    <div className="flex gap-4 border-t border-aluminium/10 pt-6 mt-6">
-                      {activeRepo ? (
-                        <>
-                          <button
-                            onClick={handleLaunchTask}
-                            className="px-6 py-2.5 rounded bg-carbon border border-aluminium/20 text-body text-chalk font-semibold hover:shadow-active transition-taste"
-                          >
-                            Launch Task
-                          </button>
-                          <button
-                            onClick={() => { setIsCreatingTask(false); setActiveRepo(null); setLauncherError(null); }}
-                            className="px-6 py-2.5 rounded bg-transparent border border-aluminium/15 text-body text-aluminium hover:text-chalk hover:border-aluminium/30 transition-taste"
-                          >
-                            Cancel
-                          </button>
-                        </>
-                      ) : (
-                        <button
-                          onClick={() => setIsCreatingTask(false)}
-                          className="px-6 py-2.5 rounded bg-transparent border border-aluminium/15 text-body text-aluminium hover:text-chalk hover:border-aluminium/30 transition-taste"
-                        >
-                          Back
-                        </button>
-                      )}
-                    </div>
+                {/* Left column — Launcher */}
+                <div className="w-80 border-r border-aluminium/10 flex flex-col overflow-y-auto p-8 gap-5 shrink-0">
+                  <div>
+                    <div className="text-label text-aluminium mb-1">LAUNCHER</div>
+                    <h2 className="text-title text-chalk font-semibold">New Task</h2>
                   </div>
-                )}
 
-                {/* QUEUE VIEW */}
-                {taskRunState === 'idle' && !isCreatingTask && (
-                  <div className="flex-1 flex flex-col justify-between">
+                  {launcherError && (
+                    <div className="bg-carbon/50 border border-signal/30 p-3 rounded flex items-center gap-3">
+                      <div className="w-2 h-2 rounded-full bg-signal shadow-signal animate-pulse-signal shrink-0" />
+                      <span className="text-data text-signal text-xs">{launcherError}</span>
+                    </div>
+                  )}
+
+                  {/* Repository selector */}
+                  <div className="flex flex-col gap-2">
+                    <label className="text-label text-aluminium">Git Repository</label>
+                    <select
+                      id="launcher-repo-select"
+                      value={activeRepo ? activeRepo.path : ''}
+                      onChange={(e) => {
+                        const found = recentRepos.find((r) => r.path === e.target.value);
+                        if (found) handleSelectRecentRepo(found);
+                        else setActiveRepo(null);
+                      }}
+                      className="w-full bg-well border border-aluminium/20 rounded p-2.5 text-data text-chalk focus:border-chalk outline-none cursor-pointer"
+                    >
+                      <option value="">— Select Repository —</option>
+                      {recentRepos.map((repo) => (
+                        <option key={repo.path} value={repo.path}>
+                          {repo.displayName}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={handleImportRepo}
+                      className="w-full px-3 py-2 rounded bg-carbon border border-aluminium/20 text-label text-chalk hover:shadow-active transition-taste"
+                    >
+                      Import Repo
+                    </button>
+                  </div>
+
+                  {/* Task description */}
+                  <div className="flex flex-col gap-2">
+                    <label className="text-label text-aluminium">Task Prompt</label>
+                    <textarea
+                      id="launcher-prompt"
+                      value={taskDescription}
+                      onChange={(e) => setTaskDescription(e.target.value)}
+                      placeholder="e.g. Add capitalize(str) and write a vitest test…"
+                      rows={5}
+                      className="bg-well border border-aluminium/20 rounded p-2.5 text-body text-chalk focus:border-chalk outline-none resize-none"
+                    />
+                  </div>
+
+                  {/* Base branch */}
+                  <div className="flex flex-col gap-2">
+                    <label className="text-label text-aluminium">Base Branch</label>
+                    <input
+                      id="launcher-branch"
+                      type="text"
+                      value={taskBranch}
+                      onChange={(e) => setTaskBranch(e.target.value)}
+                      placeholder="main"
+                      className="bg-well border border-aluminium/20 rounded p-2.5 text-data text-chalk focus:border-chalk outline-none"
+                    />
+                  </div>
+
+                  {/* Model override */}
+                  <div className="flex flex-col gap-2">
+                    <label className="text-label text-aluminium">Model</label>
+                    <input
+                      id="launcher-model"
+                      type="text"
+                      value={taskModel}
+                      onChange={(e) => setTaskModel(e.target.value)}
+                      list="together-models-launcher"
+                      className="bg-well border border-aluminium/20 rounded p-2.5 text-data text-chalk focus:border-chalk outline-none"
+                    />
+                    <datalist id="together-models-launcher">
+                      <option value="meta-llama/Llama-3.3-70B-Instruct-Turbo" />
+                      <option value="meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo" />
+                      <option value="Qwen/Qwen2.5-72B-Instruct-Turbo" />
+                      <option value="deepseek-ai/DeepSeek-V3" />
+                    </datalist>
+                  </div>
+
+                  {/* Launch button */}
+                  <button
+                    id="launch-task-btn"
+                    onClick={handleLaunchTask}
+                    disabled={isLaunching || !activeRepo || !taskDescription.trim()}
+                    className="w-full px-4 py-3 rounded bg-carbon border border-aluminium/20 text-body text-chalk font-semibold hover:shadow-active disabled:opacity-40 disabled:cursor-not-allowed transition-taste"
+                  >
+                    {isLaunching ? 'Launching…' : 'Launch Task'}
+                  </button>
+                </div>
+
+                {/* Right column — Glyph Wall */}
+                <div className="flex-1 flex flex-col overflow-hidden p-8 gap-5">
+
+                  {/* Summary bar — quiet, informational */}
+                  <div className="flex items-center justify-between shrink-0">
                     <div>
-                      <div className="text-label text-aluminium mb-1">CURRENT AREA</div>
-                      <h2 className="text-title text-chalk mb-6 font-semibold">Task Queue</h2>
-
-                      {launcherError && (
-                        <div className="bg-carbon/50 border border-signal/30 p-4 rounded flex items-center gap-3 mb-6 max-w-xl">
-                          <div className="w-2 h-2 rounded-full bg-signal shadow-signal animate-pulse-signal" />
-                          <span className="text-data text-signal text-xs">{launcherError}</span>
-                        </div>
-                      )}
-
-                      {recentRepos.length > 0 ? (
-                        <div className="flex flex-col gap-4">
-                          <div className="text-label text-aluminium/60 font-semibold mb-1">KNOWN REPOSITORIES</div>
-                          <div className="flex flex-col gap-3 max-w-xl">
-                            {recentRepos.map((repo) => (
-                              <div key={repo.path} className="flex justify-between items-center p-4 bg-carbon/40 rounded border border-aluminium/10">
-                                <div className="truncate pr-4">
-                                  <div className="text-body font-semibold text-chalk">{repo.displayName}</div>
-                                  <div className="text-data text-aluminium text-xs mt-1 truncate">{repo.path}</div>
-                                </div>
-                                <button
-                                  onClick={() => { handleSelectRecentRepo(repo); setIsCreatingTask(true); }}
-                                  className="px-4 py-1.5 rounded bg-carbon border border-aluminium/20 text-label text-chalk hover:shadow-active transition-taste whitespace-nowrap"
-                                >
-                                  Create Task
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="flex flex-col items-center justify-center border border-dashed border-aluminium/10 rounded-lg py-16 px-4 bg-carbon/20 max-w-xl">
-                          <p className="text-data text-aluminium text-center max-w-sm">
-                            No active tasks. Load a recipe or import a repository to begin.
-                          </p>
-                        </div>
-                      )}
+                      <div className="text-label text-aluminium mb-1">GLYPH WALL</div>
+                      <h2 className="text-title text-chalk font-semibold">Active Tasks</h2>
                     </div>
-
-                    <div className="flex gap-4 border-t border-aluminium/10 pt-6 mt-6">
-                      <button
-                        onClick={() => {
-                          if (recentRepos.length > 0) handleSelectRecentRepo(recentRepos[0]);
-                          setIsCreatingTask(true);
-                        }}
-                        className="px-6 py-2.5 rounded bg-carbon border border-aluminium/20 text-body text-chalk font-semibold hover:shadow-active transition-taste"
-                      >
-                        Create Task
-                      </button>
-                      <button
-                        onClick={handleImportRepo}
-                        className="px-6 py-2.5 rounded bg-transparent border border-aluminium/15 text-body text-aluminium hover:text-chalk hover:border-aluminium/30 transition-taste"
-                      >
-                        Import Repo
-                      </button>
+                    <div id="dashboard-summary" className="flex items-center gap-3 bg-carbon/40 border border-aluminium/10 px-4 py-2 rounded text-label">
+                      <span className="font-dot text-[11px] text-chalk">{runningCount}</span>
+                      <span className="text-aluminium/60">running</span>
+                      <span className="text-aluminium/30">·</span>
+                      <span className="font-dot text-[11px] text-chalk/60">{queuedCount}</span>
+                      <span className="text-aluminium/60">queued</span>
+                      <span className="text-aluminium/30">·</span>
+                      <span className="font-dot text-[11px] text-aluminium/50">{doneCount}</span>
+                      <span className="text-aluminium/60">done</span>
                     </div>
                   </div>
-                )}
+
+                  {/* The Wall — the signature moment */}
+                  <GlyphWall
+                    tasks={activeTasks}
+                    tickNow={tickNow}
+                    onInspect={handleInspectTask}
+                    onDismiss={handleDismissTask}
+                    onCancel={handleCancelTaskFromGrid}
+                  />
+                </div>
               </div>
+              )
             )}
 
             {/* ── RECIPES TAB ─────────────────────────────────────────────── */}
             {activeTab === 'recipes' && (
-              <div className="flex-1 flex flex-col justify-between">
+              <div className="flex-1 flex flex-col justify-between p-8">
                 <div>
                   <div className="text-label text-aluminium mb-1">CURRENT AREA</div>
                   <h2 className="text-title text-chalk mb-6">Available Recipes</h2>
@@ -599,12 +617,12 @@ export default function App(): React.JSX.Element {
             {/* ── HISTORY TAB ─────────────────────────────────────────────── */}
             {activeTab === 'history' && (
               selectedTaskId && selectedTaskRecord ? (
-                <div className="flex-1 flex flex-col justify-between h-full overflow-hidden">
+                <div className="flex-1 flex flex-col justify-between h-full overflow-hidden p-8">
                   <ThreePaneTaskDetail
                     task={selectedTaskRecord.task}
                     events={selectedTaskRecord.events}
                     diff={selectedTaskRecord.diff || ''}
-                    runState={selectedTaskRecord.task.status as any}
+                    runState={selectedTaskRecord.task.status as TaskRunState}
                     errorMessage={
                       selectedTaskRecord.task.status === 'failed'
                         ? (selectedTaskRecord.events.find((e) => e.type === 'status' && (e as any).error) as any)?.error ||
@@ -633,12 +651,12 @@ export default function App(): React.JSX.Element {
                   />
                 </div>
               ) : (
-                <div className="flex-1 flex flex-col justify-between">
+                <div className="flex-1 flex flex-col justify-between p-8">
                   <div>
                     <div className="text-label text-aluminium mb-1">CURRENT AREA</div>
                     <h2 className="text-title text-chalk mb-6">Recent Runs</h2>
 
-                    {taskHistory.length === 0 ? (
+                    {historyTasks.length === 0 ? (
                       <div className="flex flex-col items-center justify-center border border-dashed border-aluminium/10 rounded-lg py-16 px-4 bg-carbon/20">
                         <p className="text-data text-aluminium text-center max-w-sm">
                           No run history found. Run a task to see history and cost logs.
@@ -646,7 +664,7 @@ export default function App(): React.JSX.Element {
                       </div>
                     ) : (
                       <div className="flex flex-col gap-3 max-w-xl">
-                        {taskHistory.map((t) => (
+                        {historyTasks.map((t) => (
                           <div
                             key={t.taskId}
                             onClick={async () => {
@@ -716,7 +734,7 @@ export default function App(): React.JSX.Element {
 
             {/* ── SETTINGS TAB ────────────────────────────────────────────── */}
             {activeTab === 'settings' && (
-              <div className="flex-1 flex flex-col justify-between h-full overflow-hidden">
+              <div className="flex-1 flex flex-col justify-between h-full overflow-hidden p-8">
                 <div className="flex-1 overflow-y-auto pr-2 min-h-0 flex flex-col gap-6 max-w-xl">
                   <div>
                     <div className="text-label text-aluminium mb-1">CURRENT AREA</div>
@@ -889,7 +907,7 @@ export default function App(): React.JSX.Element {
           </div>
 
           {/* IPC diagnostic footer */}
-          <footer className="mt-6 border-t border-aluminium/10 pt-6 flex flex-col gap-2">
+          <footer className="border-t border-aluminium/10 p-6 flex flex-col gap-2 shrink-0">
             <div className="text-label text-aluminium select-none">IPC DIAGNOSTIC LOG</div>
             <div className="bg-well p-4 rounded border border-aluminium/10 text-data text-chalk select-text">
               {error ? (
