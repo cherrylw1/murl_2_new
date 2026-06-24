@@ -111,6 +111,11 @@ export class TaskStore {
     } catch {
       // Swallowed since the column likely already exists
     }
+    try {
+      this.db.exec('ALTER TABLE tasks ADD COLUMN followUpCount INTEGER NOT NULL DEFAULT 0;');
+    } catch {
+      // Swallowed since the column likely already exists
+    }
   }
 
   createTask(task: Omit<PersistedTask, 'id' | 'createdAt' | 'completedAt' | 'outcome'>): PersistedTask {
@@ -170,6 +175,16 @@ export class TaskStore {
   setOutcome(taskId: string, outcome: 'kept' | 'discarded'): void {
     const stmt = this.db.prepare('UPDATE tasks SET outcome = ? WHERE taskId = ?');
     stmt.run(outcome, taskId);
+  }
+
+  /**
+   * Atomically increments the follow-up counter for a task and returns the new value.
+   * Used to number follow-up runs for separator labels in the event stream.
+   */
+  incrementFollowUpCount(taskId: string): number {
+    this.db.prepare('UPDATE tasks SET followUpCount = followUpCount + 1 WHERE taskId = ?').run(taskId);
+    const row = this.db.prepare('SELECT followUpCount FROM tasks WHERE taskId = ?').get(taskId) as { followUpCount: number } | undefined;
+    return row ? Number(row.followUpCount) : 1;
   }
 
   appendEvents(taskId: string, events: MurlEvent[]): void {

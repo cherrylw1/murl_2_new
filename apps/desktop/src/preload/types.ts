@@ -131,6 +131,7 @@ export interface MurlApi {
   getTaskRecord(taskId: string): Promise<TaskRecord | null>;
   keepTask(taskId: string): Promise<{ success: boolean; message?: string }>;
   discardTask(taskId: string): Promise<{ success: boolean; message?: string }>;
+  followUpTask(taskId: string, prompt: string): Promise<void>;
 
   // Push listeners — subscribe to live task events from the main process
   onTaskEvent(cb: (payload: TaskEventPayload) => void): void;

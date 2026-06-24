@@ -22,6 +22,8 @@ interface ThreePaneTaskDetailProps {
   diff: string;
   runState: 'running' | 'completed' | 'failed' | 'cancelled' | 'idle' | 'queued';
   errorMessage?: string;
+  /** If provided, show the follow-up input. Called when the user sends a follow-up prompt. */
+  onFollowUp?: (prompt: string) => Promise<void>;
   onBack: () => void;
   onCancel?: () => void;
 }
@@ -94,6 +96,18 @@ function highlightLine(content: string, language: string): React.ReactNode {
 }
 
 function renderDetailEvent(event: MurlEvent, idx: number): React.ReactNode {
+  // Separator injected before each follow-up run
+  if (event.type === 'status' && event.error?.startsWith('---')) {
+    return (
+      <div key={idx} className="flex items-center gap-2 py-2 select-none">
+        <div className="flex-1 h-px bg-aluminium/10" />
+        <span className="text-label text-[9px] text-aluminium/35 tracking-widest font-mono whitespace-nowrap">
+          {event.error.replace(/^---\s*/, '').replace(/\s*---$/, '')}
+        </span>
+        <div className="flex-1 h-px bg-aluminium/10" />
+      </div>
+    );
+  }
   if (event.type === 'status') {
     return (
       <div key={idx} className="text-aluminium/70 text-xs py-1 border-b border-aluminium/5 font-mono">
@@ -140,6 +154,7 @@ export default function ThreePaneTaskDetail({
   diff,
   runState,
   errorMessage,
+  onFollowUp,
   onBack,
   onCancel,
 }: ThreePaneTaskDetailProps) {
@@ -150,6 +165,28 @@ export default function ThreePaneTaskDetail({
   const [outcome, setOutcome] = useState<'kept' | 'discarded' | null>((task.outcome as any) || null);
   const [outcomeError, setOutcomeError] = useState<string | null>(null);
   const [isOutcomePending, setIsOutcomePending] = useState<boolean>(false);
+
+  // Follow-up state
+  const [followUpPrompt, setFollowUpPrompt] = useState('');
+  const [isFollowUpRunning, setIsFollowUpRunning] = useState(false);
+  const [followUpError, setFollowUpError] = useState<string | null>(null);
+  const followUpInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFollowUp = async () => {
+    if (!followUpPrompt.trim() || isFollowUpRunning || !onFollowUp) return;
+    const p = followUpPrompt.trim();
+    setIsFollowUpRunning(true);
+    setFollowUpError(null);
+    setFollowUpPrompt('');
+    try {
+      await onFollowUp(p);
+    } catch (err: any) {
+      setFollowUpError(err.message || String(err));
+    } finally {
+      setIsFollowUpRunning(false);
+      followUpInputRef.current?.focus();
+    }
+  };
 
   const handleKeep = async () => {
     if (!task.taskId) return;
@@ -340,6 +377,37 @@ export default function ThreePaneTaskDetail({
         )}
       </div>
 
+      {/* ── FOLLOW-UP INPUT ──────────────────────────────────────────────────── */}
+      {onFollowUp && (
+        <div className="flex flex-col gap-2 py-3 border-b border-aluminium/10">
+          <div className="flex items-center gap-2">
+            <input
+              ref={followUpInputRef}
+              type="text"
+              value={followUpPrompt}
+              onChange={(e) => setFollowUpPrompt(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleFollowUp(); }}
+              disabled={isFollowUpRunning || runState === 'running'}
+              placeholder={runState === 'running' ? 'Follow-up available after current run completes…' : 'Follow-up instruction…'}
+              className="flex-1 bg-carbon/40 border border-aluminium/15 rounded px-3 py-2 text-body text-chalk text-xs placeholder-aluminium/30 focus:outline-none focus:border-aluminium/35 focus:bg-carbon/60 disabled:opacity-40 disabled:cursor-not-allowed transition-taste"
+            />
+            <button
+              onClick={handleFollowUp}
+              disabled={!followUpPrompt.trim() || isFollowUpRunning || runState === 'running'}
+              className="px-4 py-2 rounded bg-carbon border border-aluminium/20 text-label text-chalk text-xs font-semibold hover:shadow-active disabled:opacity-30 disabled:cursor-not-allowed transition-taste shrink-0"
+            >
+              {isFollowUpRunning ? 'Running…' : 'Send'}
+            </button>
+          </div>
+          {followUpError && (
+            <div className="flex items-center gap-2 text-signal text-xs font-mono">
+              <div className="w-1.5 h-1.5 rounded-full bg-signal shrink-0" />
+              {followUpError}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Three Pane Layout */}
       <div className="flex-1 flex gap-4 min-h-0 overflow-hidden mt-4">
         
@@ -400,7 +468,11 @@ export default function ThreePaneTaskDetail({
               <div className="flex-1 flex items-center justify-center text-aluminium/40 text-xs italic select-none">
                 {runState === 'running'
                   ? 'Waiting for task execution to modify files…'
-                  : 'No changes to display.'}
+                  : runState === 'cancelled'
+                    ? 'Task was cancelled — no diff available.'
+                    : runState === 'failed'
+                      ? 'Task failed — no diff captured.'
+                      : 'No changes to display.'}
               </div>
             ) : activeFile.isBinary ? (
               <div className="flex-1 flex items-center justify-center text-aluminium/50 text-xs font-mono select-none">
@@ -485,7 +557,11 @@ export default function ThreePaneTaskDetail({
           <div className="flex-1 min-h-0 bg-well border border-aluminium/20 rounded-lg p-3 overflow-y-auto">
             {events.length === 0 ? (
               <div className="text-aluminium/40 text-xs italic select-none">
-                Waiting for agent events…
+                {runState === 'running' || runState === 'queued'
+                  ? 'Waiting for agent events…'
+                  : runState === 'cancelled'
+                    ? 'Task was cancelled — no events were recorded.'
+                    : 'No events recorded for this task.'}
               </div>
             ) : (
               <div className="flex flex-col">

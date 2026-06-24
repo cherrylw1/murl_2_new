@@ -345,10 +345,17 @@ export default function App(): React.JSX.Element {
     : null;
   const inspectingRunState: TaskRunState = (inspectingTaskLive?.status as TaskRunState) ?? 'idle';
 
-  // History tab shows everything that has a final outcome OR is not running/queued
-  const historyTasks = taskHistory.filter(
-    (t) => t.outcome !== null || (t.status !== 'running' && t.status !== 'queued')
-  );
+  // History tab — shows only tasks that have definitively ended.
+  // Transition rule (must match isActiveTask complement):
+  //   - completed + outcome !== null → decided, moved to history
+  //   - failed / cancelled → always in history (no decision needed)
+  //   - completed + outcome === null → still on Glyph Wall, NOT in history yet
+  //   - running / queued → never in history
+  const historyTasks = taskHistory.filter((t) => {
+    if (t.status === 'running' || t.status === 'queued') return false;
+    if (t.status === 'completed' && t.outcome === null) return false; // still active
+    return true; // failed, cancelled, or completed+decided
+  });
 
   // ─── Render ─────────────────────────────────────────────────────────────────
 
@@ -437,6 +444,13 @@ export default function App(): React.JSX.Element {
                     diff={inspectingDiff}
                     runState={inspectingRunState}
                     errorMessage={inspectingError || undefined}
+                    onFollowUp={
+                      inspectingRunState === 'completed' && inspectingRecord.task.outcome === null
+                        ? async (prompt) => {
+                            await window.murl.followUpTask(inspectingRecord.task.taskId, prompt);
+                          }
+                        : undefined
+                    }
                     onBack={handleBackToDashboard}
                     onCancel={
                       inspectingRunState === 'running' || inspectingRunState === 'queued'
@@ -629,6 +643,16 @@ export default function App(): React.JSX.Element {
                           'Task execution failed'
                         : undefined
                     }
+                    onFollowUp={
+                      selectedTaskRecord.task.status === 'completed' && selectedTaskRecord.task.outcome === null
+                        ? async (prompt) => {
+                            await window.murl.followUpTask(selectedTaskRecord.task.taskId, prompt);
+                            // Refresh the record so the updated diff + events are shown
+                            const updated = await window.murl.getTaskRecord(selectedTaskRecord.task.taskId);
+                            if (updated) setSelectedTaskRecord(updated);
+                          }
+                        : undefined
+                    }
                     onBack={() => {
                       setSelectedTaskId(null);
                       setSelectedTaskRecord(null);
@@ -664,7 +688,18 @@ export default function App(): React.JSX.Element {
                       </div>
                     ) : (
                       <div className="flex flex-col gap-3 max-w-xl">
-                        {historyTasks.map((t) => (
+                        {historyTasks.map((t) => {
+                          // Duration in seconds, if both timestamps available
+                          const durationSecs = t.completedAt && t.createdAt
+                            ? Math.round((t.completedAt - t.createdAt) / 1000)
+                            : null;
+                          const durationStr = durationSecs !== null
+                            ? durationSecs >= 60
+                              ? `${Math.floor(durationSecs / 60)}m ${durationSecs % 60}s`
+                              : `${durationSecs}s`
+                            : null;
+
+                          return (
                           <div
                             key={t.taskId}
                             onClick={async () => {
@@ -678,45 +713,53 @@ export default function App(): React.JSX.Element {
                                 console.error('Failed to load task record:', err);
                               }
                             }}
-                            className="p-4 bg-carbon/40 rounded border border-aluminium/10 flex flex-col gap-1 hover:border-aluminium/35 hover:bg-carbon/60 cursor-pointer transition-taste"
+                            className="p-4 bg-carbon/40 rounded border border-aluminium/10 flex flex-col gap-2 hover:border-aluminium/35 hover:bg-carbon/60 cursor-pointer transition-taste"
                           >
+                            {/* Row header: status dot + label + outcome badge + timestamp */}
                             <div className="flex items-center justify-between">
                               <div className="flex items-center gap-2">
-                                <div className={`w-2 h-2 rounded-full ${
+                                <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
                                   t.status === 'completed' ? 'bg-chalk shadow-active' :
                                   t.status === 'failed'    ? 'bg-signal shadow-signal' :
-                                  t.status === 'cancelled' ? 'bg-aluminium' :
-                                  t.status === 'queued'    ? 'bg-aluminium/30' :
-                                  'bg-aluminium animate-breath'
+                                                            'bg-aluminium'
                                 }`} />
                                 <span className={`text-label text-xs font-semibold ${
                                   t.status === 'completed' ? 'text-chalk' :
                                   t.status === 'failed'    ? 'text-signal' :
-                                  t.status === 'queued'    ? 'text-aluminium/50' :
-                                  'text-aluminium'
+                                                            'text-aluminium/60'
                                 }`}>
-                                  {t.status === 'queued' && t.queuePosition !== undefined
-                                    ? `QUEUED (${t.queuePosition === 0 ? 'next' : `${t.queuePosition} ahead`})`
-                                    : t.status.toUpperCase()}
+                                  {t.status.toUpperCase()}
                                 </span>
                                 {t.outcome && (
                                   <span className={`text-label text-[9px] px-1.5 py-0.5 rounded border font-mono select-none ${
                                     t.outcome === 'kept'
                                       ? 'border-aluminium/20 text-chalk bg-carbon/50 shadow-active'
-                                      : 'border-transparent text-aluminium/65'
+                                      : 'border-transparent text-aluminium/55'
                                   }`}>
                                     {t.outcome.toUpperCase()}
                                   </span>
                                 )}
                               </div>
-                              <span className="text-data text-aluminium/60 text-xs">
-                                {new Date(t.createdAt).toLocaleString()}
-                              </span>
+                              <div className="flex items-center gap-3 shrink-0">
+                                {durationStr && (
+                                  <span className="font-dot text-[9px] text-aluminium/50 tabular-nums">{durationStr}</span>
+                                )}
+                                <span className="text-data text-aluminium/40 text-xs">
+                                  {new Date(t.completedAt ?? t.createdAt).toLocaleString()}
+                                </span>
+                              </div>
                             </div>
-                            <div className="text-body text-chalk text-xs truncate mt-1">{t.prompt}</div>
-                            <div className="text-data text-aluminium/60 text-xs truncate">{t.model} · {t.branch}</div>
+
+                            {/* Prompt — truncated */}
+                            <div className="text-body text-chalk text-xs line-clamp-2 leading-relaxed">{t.prompt}</div>
+
+                            {/* Meta: model · branch */}
+                            <div className="text-data text-aluminium/50 text-xs truncate">
+                              {t.model} · {t.branch ?? t.baseBranch ?? '—'}
+                            </div>
                           </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
                   </div>

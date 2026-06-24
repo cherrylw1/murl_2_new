@@ -262,6 +262,14 @@ ipcMain.handle('murl:discardTask', async (_event, taskId: string) => {
   return taskRunner.discard(taskId);
 });
 
+ipcMain.handle('murl:followUpTask', async (_event, taskId: string, prompt: string) => {
+  if (!taskRunner) throw new Error('TaskRunner not initialized.');
+  if (!mainWindow) throw new Error('Main window not available.');
+  // followUp() is fire-and-forget (the result is streamed via push events),
+  // but we await it to surface immediate validation errors (wrong state, missing worktree) back to the renderer.
+  await taskRunner.followUp(taskId, prompt, mainWindow.webContents);
+});
+
 ipcMain.handle('murl:cancelTask', async (_event, taskId: string) => {
   if (!taskRunner) throw new Error('TaskRunner not initialized.');
   await taskRunner.cancel(taskId);

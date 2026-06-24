@@ -10,6 +10,7 @@
 
 import * as crypto from 'crypto';
 import * as path from 'path';
+import * as fs from 'fs';
 import type { WebContents } from 'electron';
 import { WorktreeManager, OpenCodeAdapter, TaskStore } from '@murl/core';
 import type { MurlEvent, PersistedTask, TaskRecord } from '@murl/core';
@@ -416,6 +417,110 @@ export class TaskRunner {
         success: false,
         message: `Discard failed: ${err.message || String(err)}`,
       };
+    }
+  }
+
+  /**
+   * Sends a follow-up prompt to an existing completed task's worktree.
+   * The task must be completed, have no outcome yet, and its worktree must exist on disk.
+   * Runs a fresh OpenCode session against the same worktree (Option B — pragmatic re-prompt).
+   * Events are appended to the existing TaskStore record; the diff is recaptured cumulatively.
+   */
+  async followUp(
+    taskId: string,
+    prompt: string,
+    webContents: WebContents
+  ): Promise<void> {
+    const record = this.store.getTask(taskId);
+    if (!record) {
+      throw new Error(`Task ${taskId} not found.`);
+    }
+    if (record.task.status !== 'completed') {
+      throw new Error(`Cannot follow up: task is not in 'completed' state (current: ${record.task.status}).`);
+    }
+    if (record.task.outcome !== null) {
+      throw new Error(`Cannot follow up: task already has an outcome ('${record.task.outcome}') — its worktree has been removed.`);
+    }
+    if (!fs.existsSync(record.task.worktreePath)) {
+      throw new Error(`Cannot follow up: worktree no longer exists at ${record.task.worktreePath}.`);
+    }
+
+    const { worktreePath, model } = record.task;
+    const abortController = new AbortController();
+    const settings = loadSettings();
+    const binPath = settings.openCodePathOverride || undefined;
+    const adapter = new OpenCodeAdapter(binPath ? { binPath } : undefined);
+
+    // Register in activeTasks so cancel() can abort the follow-up
+    const activeEntry: ActiveTask = {
+      abortController,
+      wasCancelled: false,
+      worktreePath,
+      worktreeManager: new WorktreeManager(record.task.repoPath || worktreePath, path.dirname(worktreePath)),
+    };
+    this.activeTasks.set(taskId, activeEntry);
+
+    /** Safely push an IPC message to the renderer */
+    const push = (channel: string, payload: unknown) => {
+      try {
+        if (!webContents.isDestroyed()) webContents.send(channel, payload);
+      } catch { /* renderer closed */ }
+    };
+
+    try {
+      // 1. Increment follow-up count and inject a separator event into the stream
+      const followUpN = this.store.incrementFollowUpCount(taskId);
+      const separatorEvent: MurlEvent = {
+        type: 'status',
+        status: 'running',
+        error: `--- FOLLOW-UP ${followUpN} ---`,
+      };
+      this.store.appendEvents(taskId, [separatorEvent]);
+      // Also push the separator live to the renderer (for users watching the detail view)
+      push('murl:task-event', { taskId, event: separatorEvent });
+
+      // 2. Transition back to running in DB + push to renderer
+      this.store.updateTaskStatus(taskId, 'running');
+      push('murl:task-event', { taskId, event: { type: 'status', status: 'running' } });
+
+      // 3. Execute the follow-up run
+      const collectedEvents: MurlEvent[] = [];
+      const onEvent = (event: MurlEvent) => {
+        collectedEvents.push(event);
+        push('murl:task-event', { taskId, event });
+      };
+
+      const { diff } = await adapter.runTask(
+        worktreePath,
+        prompt,
+        { model },
+        onEvent,
+        abortController.signal
+      );
+
+      // 4. SUCCESS — append events, save cumulative diff, mark completed
+      if (collectedEvents.length > 0) {
+        this.store.appendEvents(taskId, collectedEvents);
+      }
+      this.store.saveDiff(taskId, diff); // INSERT OR REPLACE — overwrites with cumulative diff
+      this.store.updateTaskStatus(taskId, 'completed', Date.now());
+      push('murl:task-complete', { taskId, diff });
+    } catch (err: any) {
+      // 5. FAILURE — mark failed but do NOT remove worktree (original work is still there)
+      const wasCancelled = activeEntry.wasCancelled;
+      const status = wasCancelled ? 'cancelled' : 'failed';
+      this.store.updateTaskStatus(taskId, status, Date.now());
+      if (wasCancelled) {
+        push('murl:task-cancelled', { taskId });
+      } else {
+        push('murl:task-failed', { taskId, error: err.message || String(err) });
+      }
+    } finally {
+      this.activeTasks.delete(taskId);
+      try { await adapter.stopServer(); } catch { /* ignore */ }
+      this.processQueue().catch((qErr) => {
+        console.error('[TaskRunner] Error processing queue after follow-up:', qErr);
+      });
     }
   }
 

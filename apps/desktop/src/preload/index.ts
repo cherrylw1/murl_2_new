@@ -68,6 +68,7 @@ const murlApi: MurlApi = {
   getTaskRecord: (taskId: string) => ipcRenderer.invoke('murl:getTaskRecord', taskId),
   keepTask: (taskId: string) => ipcRenderer.invoke('murl:keepTask', taskId),
   discardTask: (taskId: string) => ipcRenderer.invoke('murl:discardTask', taskId),
+  followUpTask: (taskId: string, prompt: string) => ipcRenderer.invoke('murl:followUpTask', taskId, prompt),
 
   // Push event subscriptions
   onTaskEvent:    (cb) => taskEventBridge.on(cb as AnyFn),
