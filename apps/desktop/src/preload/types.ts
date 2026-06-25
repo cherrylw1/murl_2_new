@@ -83,6 +83,7 @@ export interface PersistedTask {
   costUsd?: number | null;
   tokensIn?: number | null;
   tokensOut?: number | null;
+  groupId?: string | null;
 }
 
 export interface PersistedCost {
@@ -188,10 +189,11 @@ export interface MurlApi {
   getRepoBranch(path: string): Promise<string>;
 
   // Task execution
-  launchTask(repoPath: string, prompt: string, model: string, provider: string, budgetCap: number, baseBranch?: string): Promise<string>;
+  launchTask(repoPath: string, prompt: string, model: string, provider: string, budgetCap: number, baseBranch?: string, groupId?: string): Promise<string>;
   cancelTask(taskId: string): Promise<void>;
   getTaskHistory(): Promise<PersistedTask[]>;
   getTaskRecord(taskId: string): Promise<TaskRecord | null>;
+  getTasksByGroupId(groupId: string): Promise<PersistedTask[]>;
   keepTask(taskId: string): Promise<{ success: boolean; message?: string }>;
   discardTask(taskId: string): Promise<{ success: boolean; message?: string }>;
   openPrTask(taskId: string): Promise<{ success: boolean; prUrl?: string; message?: string }>;

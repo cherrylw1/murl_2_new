@@ -28,6 +28,7 @@ export interface PersistedTask {
   costUsd?: number | null;
   tokensIn?: number | null;
   tokensOut?: number | null;
+  groupId?: string | null;
 }
 
 export interface PersistedCost {
@@ -89,7 +90,8 @@ export class TaskStore {
         createdAt INTEGER NOT NULL,
         completedAt INTEGER,
         outcome TEXT,
-        budgetCap REAL
+        budgetCap REAL,
+        groupId TEXT
       );
 
       CREATE TABLE IF NOT EXISTS events (
@@ -157,6 +159,11 @@ export class TaskStore {
     } catch {
       // Swallowed since the column likely already exists
     }
+    try {
+      this.db.exec('ALTER TABLE tasks ADD COLUMN groupId TEXT;');
+    } catch {
+      // Swallowed since the column likely already exists
+    }
   }
 
   createTask(task: Omit<PersistedTask, 'id' | 'createdAt' | 'completedAt' | 'outcome'>): PersistedTask {
@@ -166,8 +173,8 @@ export class TaskStore {
     const completedAt = null;
 
     const stmt = this.db.prepare(`
-      INSERT INTO tasks (id, taskId, worktreePath, branch, baseBranch, repoPath, prompt, model, provider, status, createdAt, completedAt, outcome, budgetCap)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tasks (id, taskId, worktreePath, branch, baseBranch, repoPath, prompt, model, provider, status, createdAt, completedAt, outcome, budgetCap, groupId)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
@@ -184,7 +191,8 @@ export class TaskStore {
       createdAt,
       completedAt,
       outcome,
-      task.budgetCap || null
+      task.budgetCap || null,
+      task.groupId || null
     );
 
     return {
@@ -202,6 +210,7 @@ export class TaskStore {
       completedAt,
       outcome,
       budgetCap: task.budgetCap || null,
+      groupId: task.groupId || null,
     };
   }
 
@@ -308,6 +317,7 @@ export class TaskStore {
       costUsd: taskRow.costUsd !== null && taskRow.costUsd !== undefined ? Number(taskRow.costUsd) : null,
       tokensIn: taskRow.tokensIn !== null && taskRow.tokensIn !== undefined ? Number(taskRow.tokensIn) : null,
       tokensOut: taskRow.tokensOut !== null && taskRow.tokensOut !== undefined ? Number(taskRow.tokensOut) : null,
+      groupId: taskRow.groupId ?? null,
     };
 
     // Query events
@@ -361,6 +371,7 @@ export class TaskStore {
       costUsd: row.costUsd !== null && row.costUsd !== undefined ? Number(row.costUsd) : null,
       tokensIn: row.tokensIn !== null && row.tokensIn !== undefined ? Number(row.tokensIn) : null,
       tokensOut: row.tokensOut !== null && row.tokensOut !== undefined ? Number(row.tokensOut) : null,
+      groupId: row.groupId ?? null,
     }));
   }
 
@@ -410,5 +421,30 @@ export class TaskStore {
   deleteRecipe(id: string): void {
     const stmt = this.db.prepare('DELETE FROM recipes WHERE id = ?');
     stmt.run(id);
+  }
+
+  listTasksByGroupId(groupId: string): PersistedTask[] {
+    const stmt = this.db.prepare(`
+      SELECT t.*, c.costUsd, c.tokensIn, c.tokensOut
+      FROM tasks t
+      LEFT JOIN cost c ON t.taskId = c.taskId
+      WHERE t.groupId = ?
+      ORDER BY t.createdAt ASC
+    `);
+    const rows = stmt.all(groupId) as any[];
+    return rows.map((row) => ({
+      ...row,
+      completedAt: row.completedAt === null ? null : Number(row.completedAt),
+      createdAt: Number(row.createdAt),
+      outcome: row.outcome as any,
+      prUrl: row.prUrl ?? null,
+      baseBranch: row.baseBranch || 'main',
+      repoPath: row.repoPath || '',
+      budgetCap: row.budgetCap !== null && row.budgetCap !== undefined ? Number(row.budgetCap) : null,
+      costUsd: row.costUsd !== null && row.costUsd !== undefined ? Number(row.costUsd) : null,
+      tokensIn: row.tokensIn !== null && row.tokensIn !== undefined ? Number(row.tokensIn) : null,
+      tokensOut: row.tokensOut !== null && row.tokensOut !== undefined ? Number(row.tokensOut) : null,
+      groupId: row.groupId ?? null,
+    }));
   }
 }

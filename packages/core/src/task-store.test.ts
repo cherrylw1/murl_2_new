@@ -260,5 +260,52 @@ describe('TaskStore', () => {
     recipes = store.listRecipes();
     expect(recipes.length).toBe(0);
   });
+
+  it('should support fanned-out tasks in a group (groupId)', () => {
+    const groupId = 'test-group-1';
+
+    const t1 = store.createTask({
+      taskId: 'test-group-task-1',
+      worktreePath: '/path/to/wt1',
+      branch: 'murl/test-group-task-1',
+      prompt: 'Task prompt',
+      model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo',
+      provider: 'together',
+      status: 'started',
+      groupId,
+    });
+
+    const t2 = store.createTask({
+      taskId: 'test-group-task-2',
+      worktreePath: '/path/to/wt2',
+      branch: 'murl/test-group-task-2',
+      prompt: 'Task prompt',
+      model: 'gpt-4o-mini',
+      provider: 'openai',
+      status: 'started',
+      groupId,
+    });
+
+    const groupTasks = store.listTasksByGroupId(groupId);
+    expect(groupTasks.length).toBe(2);
+    expect(groupTasks[0].taskId).toBe(t1.taskId);
+    expect(groupTasks[1].taskId).toBe(t2.taskId);
+    expect(groupTasks[0].groupId).toBe(groupId);
+    expect(groupTasks[1].groupId).toBe(groupId);
+
+    // Standalone task
+    const t3 = store.createTask({
+      taskId: 'test-standalone',
+      worktreePath: '/path/to/wt3',
+      branch: 'murl/test-standalone',
+      prompt: 'Standalone prompt',
+      model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo',
+      provider: 'together',
+      status: 'started',
+    });
+    expect(t3.groupId).toBeNull();
+    const retrievedT3 = store.getTask(t3.taskId);
+    expect(retrievedT3!.task.groupId).toBeNull();
+  });
 });
 

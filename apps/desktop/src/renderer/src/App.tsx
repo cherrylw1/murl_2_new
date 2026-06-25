@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   HarnessSettings,
   MurlEvent,
@@ -62,6 +62,12 @@ export default function App(): React.JSX.Element {
   const [recipeDescInput, setRecipeDescInput] = useState('');
   const [launcherError, setLauncherError] = useState<string | null>(null);
   const [isLaunching, setIsLaunching] = useState<boolean>(false);
+
+  // Bake-off states
+  const [bakeOffMode, setBakeOffMode] = useState<boolean>(false);
+  const [bakeOffModels, setBakeOffModels] = useState<Array<{ model: string; provider: string }>>([]);
+  const [newBakeOffProvider, setNewBakeOffProvider] = useState<string>('together');
+  const [newBakeOffModel, setNewBakeOffModel] = useState<string>('meta-llama/Llama-3.3-70B-Instruct-Turbo');
 
   // Dashboard / grid state
   const [taskHistory, setTaskHistory] = useState<PersistedTask[]>([]);
@@ -317,9 +323,20 @@ export default function App(): React.JSX.Element {
       setLauncherError('Please enter a valid positive budget cap.');
       return;
     }
+    if (bakeOffMode && bakeOffModels.length < 2) {
+      setLauncherError('Add at least 2 models for a bake-off.');
+      return;
+    }
     setIsLaunching(true);
     try {
-      await window.murl.launchTask(activeRepo.path, taskDescription, taskModel, taskProvider, cap, taskBranch);
+      if (bakeOffMode) {
+        const groupId = crypto.randomUUID ? crypto.randomUUID() : 'group-' + Date.now() + '-' + Math.random().toString(36).substring(7);
+        for (const item of bakeOffModels) {
+          await window.murl.launchTask(activeRepo.path, taskDescription, item.model, item.provider, cap, taskBranch || undefined, groupId);
+        }
+      } else {
+        await window.murl.launchTask(activeRepo.path, taskDescription, taskModel, taskProvider, cap, taskBranch || undefined);
+      }
       // Clear the prompt after a successful launch so the form is ready for the next task
       setTaskDescription('');
       fetchTaskHistory();
@@ -453,6 +470,158 @@ export default function App(): React.JSX.Element {
     }
   };
 
+  const handleAddBakeOffModel = () => {
+    if (!newBakeOffModel.trim()) return;
+    setBakeOffModels((prev) => {
+      const exists = prev.some((m) => m.provider === newBakeOffProvider && m.model === newBakeOffModel.trim());
+      if (exists) return prev;
+      return [...prev, { provider: newBakeOffProvider, model: newBakeOffModel.trim() }];
+    });
+  };
+
+  const handleRemoveBakeOffModel = (index: number) => {
+    setBakeOffModels((prev) => prev.filter((_, idx) => idx !== index));
+  };
+
+  const handleInspectSiblingFromActive = async (taskId: string) => {
+    try {
+      const record = await window.murl.getTaskRecord(taskId);
+      if (!record) return;
+      setInspectingTaskId(taskId);
+      setInspectingRecord(record);
+      setInspectingLiveEvents(record.events || []);
+      setInspectingDiff(record.diff || '');
+      setInspectingError(
+        record.task.status === 'failed'
+          ? ((record.events.find((e) => e.type === 'status' && (e as any).error) as any)?.error || 'Task failed')
+          : ''
+      );
+    } catch (err) {
+      console.error('Failed to load sibling record for active view:', err);
+    }
+  };
+
+  const handleInspectSiblingFromHistory = async (taskId: string) => {
+    try {
+      const record = await window.murl.getTaskRecord(taskId);
+      if (!record) return;
+      setSelectedTaskId(taskId);
+      setSelectedTaskRecord(record);
+    } catch (err) {
+      console.error('Failed to load sibling record for history view:', err);
+    }
+  };
+
+  const handleKeepGroupFromActive = async (taskId: string) => {
+    const siblings = inspectingGroupSiblings;
+    const otherSiblings = siblings.filter((s: PersistedTask) => s.taskId !== taskId);
+
+    const confirmMsg = `Keeping this variant will merge its changes and automatically discard the other ${otherSiblings.length} variant(s) in this bake-off group. Do you want to continue?`;
+    if (!confirm(confirmMsg)) return;
+
+    try {
+      setIsLaunching(true);
+      const result = await window.murl.keepTask(taskId);
+      if (!result.success) {
+        alert(result.message || 'Failed to keep task changes.');
+        return;
+      }
+
+      for (const sibling of otherSiblings) {
+        if (sibling.status === 'running' || sibling.status === 'queued') {
+          await window.murl.cancelTask(sibling.taskId);
+        }
+        await window.murl.discardTask(sibling.taskId);
+      }
+
+      fetchTaskHistory();
+      handleBackToDashboard();
+    } catch (err: any) {
+      alert(`Error keeping group: ${err.message || String(err)}`);
+    } finally {
+      setIsLaunching(false);
+    }
+  };
+
+  const handleKeepGroupFromHistory = async (taskId: string) => {
+    const siblings = selectedGroupSiblings;
+    const otherSiblings = siblings.filter((s: PersistedTask) => s.taskId !== taskId);
+
+    const confirmMsg = `Keeping this variant will merge its changes and automatically discard the other ${otherSiblings.length} variant(s) in this bake-off group. Do you want to continue?`;
+    if (!confirm(confirmMsg)) return;
+
+    try {
+      setIsLaunching(true);
+      const result = await window.murl.keepTask(taskId);
+      if (!result.success) {
+        alert(result.message || 'Failed to keep task changes.');
+        return;
+      }
+
+      for (const sibling of otherSiblings) {
+        if (sibling.status === 'running' || sibling.status === 'queued') {
+          await window.murl.cancelTask(sibling.taskId);
+        }
+        await window.murl.discardTask(sibling.taskId);
+      }
+
+      fetchTaskHistory();
+      const winnerRecord = await window.murl.getTaskRecord(taskId);
+      if (winnerRecord) {
+        setSelectedTaskRecord(winnerRecord);
+      }
+    } catch (err: any) {
+      alert(`Error keeping group: ${err.message || String(err)}`);
+    } finally {
+      setIsLaunching(false);
+    }
+  };
+
+  const handleDiscardGroupFromActive = async () => {
+    const siblings = inspectingGroupSiblings;
+    const confirmMsg = `Are you sure you want to discard all ${siblings.length} variant(s) in this bake-off group?`;
+    if (!confirm(confirmMsg)) return;
+
+    try {
+      setIsLaunching(true);
+      for (const sibling of siblings) {
+        if (sibling.status === 'running' || sibling.status === 'queued') {
+          await window.murl.cancelTask(sibling.taskId);
+        }
+        await window.murl.discardTask(sibling.taskId);
+      }
+      fetchTaskHistory();
+      handleBackToDashboard();
+    } catch (err: any) {
+      alert(`Error discarding group: ${err.message || String(err)}`);
+    } finally {
+      setIsLaunching(false);
+    }
+  };
+
+  const handleDiscardGroupFromHistory = async () => {
+    const siblings = selectedGroupSiblings;
+    const confirmMsg = `Are you sure you want to discard all ${siblings.length} variant(s) in this bake-off group?`;
+    if (!confirm(confirmMsg)) return;
+
+    try {
+      setIsLaunching(true);
+      for (const sibling of siblings) {
+        if (sibling.status === 'running' || sibling.status === 'queued') {
+          await window.murl.cancelTask(sibling.taskId);
+        }
+        await window.murl.discardTask(sibling.taskId);
+      }
+      fetchTaskHistory();
+      setSelectedTaskId(null);
+      setSelectedTaskRecord(null);
+    } catch (err: any) {
+      alert(`Error discarding group: ${err.message || String(err)}`);
+    } finally {
+      setIsLaunching(false);
+    }
+  };
+
   // ─── Derived state ──────────────────────────────────────────────────────────
 
   const healthState = error ? 'error' : health ? 'active' : 'idle';
@@ -476,6 +645,23 @@ export default function App(): React.JSX.Element {
     ? taskHistory.find((t) => t.taskId === inspectingTaskId)
     : null;
   const inspectingRunState: TaskRunState = (inspectingTaskLive?.status as TaskRunState) ?? 'idle';
+
+  // Derived state for inspecting siblings in groups
+  const inspectingGroupSiblings = useMemo(() => {
+    const groupId = inspectingRecord?.task.groupId;
+    if (!groupId) return [];
+    return taskHistory
+      .filter((t) => t.groupId === groupId)
+      .sort((a, b) => a.createdAt - b.createdAt);
+  }, [taskHistory, inspectingRecord?.task.groupId]);
+
+  const selectedGroupSiblings = useMemo(() => {
+    const groupId = selectedTaskRecord?.task.groupId;
+    if (!groupId) return [];
+    return taskHistory
+      .filter((t) => t.groupId === groupId)
+      .sort((a, b) => a.createdAt - b.createdAt);
+  }, [taskHistory, selectedTaskRecord?.task.groupId]);
 
   // History tab — shows only tasks that have definitively ended.
   // Transition rule (must match isActiveTask complement):
@@ -594,6 +780,10 @@ export default function App(): React.JSX.Element {
                         ? async () => { await handleCancelTaskFromGrid(inspectingTaskId); }
                         : undefined
                     }
+                    groupSiblings={inspectingGroupSiblings}
+                    onInspectSibling={handleInspectSiblingFromActive}
+                    onKeepGroup={handleKeepGroupFromActive}
+                    onDiscardGroup={handleDiscardGroupFromActive}
                   />
                 </div>
               ) : (
@@ -669,59 +859,163 @@ export default function App(): React.JSX.Element {
                     />
                   </div>
 
-                  {/* Provider */}
-                  <div className="flex flex-col gap-2">
-                    <label className="text-label text-aluminium">Provider</label>
-                    <select
-                      id="launcher-provider"
-                      value={taskProvider}
-                      onChange={(e) => {
-                        const nextP = e.target.value;
-                        setTaskProvider(nextP);
-                        if (nextP === 'together') {
-                          setTaskModel('meta-llama/Llama-3.3-70B-Instruct-Turbo');
-                        } else if (nextP === 'openai') {
-                          setTaskModel('gpt-4o-mini');
-                        }
-                      }}
-                      className="bg-well border border-aluminium/20 rounded p-2.5 text-data text-chalk focus:border-chalk outline-none cursor-pointer"
-                    >
-                      {providers.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                        </option>
-                      ))}
-                    </select>
+                  {/* Bake-off Mode toggle */}
+                  <div className="flex items-center gap-2 py-1 select-none">
+                    <input
+                      type="checkbox"
+                      id="launcher-bake-off-toggle"
+                      checked={bakeOffMode}
+                      onChange={(e) => setBakeOffMode(e.target.checked)}
+                      className="w-3.5 h-3.5 accent-chalk cursor-pointer"
+                    />
+                    <label htmlFor="launcher-bake-off-toggle" className="text-label text-aluminium cursor-pointer hover:text-chalk transition-taste">
+                      Bake-off Mode (Multi-Model)
+                    </label>
                   </div>
 
-                  {/* Model override */}
-                  <div className="flex flex-col gap-2">
-                    <label className="text-label text-aluminium">Model</label>
-                    <input
-                      id="launcher-model"
-                      type="text"
-                      value={taskModel}
-                      onChange={(e) => setTaskModel(e.target.value)}
-                      list="together-models-launcher"
-                      className="bg-well border border-aluminium/20 rounded p-2.5 text-data text-chalk focus:border-chalk outline-none"
-                    />
-                    <datalist id="together-models-launcher">
-                      {taskProvider === 'openai' ? (
-                        <>
-                          <option value="gpt-4o" />
-                          <option value="gpt-4o-mini" />
-                          <option value="gpt-3.5-turbo" />
-                        </>
+                  {bakeOffMode ? (
+                    <div className="flex flex-col gap-3 bg-carbon/25 border border-aluminium/10 rounded p-3">
+                      <label className="text-label text-aluminium font-semibold">Bake-off Models ({bakeOffModels.length})</label>
+                      {bakeOffModels.length === 0 ? (
+                        <div className="text-data text-aluminium/50 text-xs italic">No models added yet.</div>
                       ) : (
-                        <>
-                          <option value="meta-llama/Llama-3.3-70B-Instruct-Turbo" />
-                          <option value="meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo" />
-                          <option value="Qwen/Qwen2.5-72B-Instruct-Turbo" />
-                          <option value="deepseek-ai/DeepSeek-V3" />
-                        </>
+                        <div className="flex flex-col gap-1.5 max-h-40 overflow-y-auto pr-1">
+                          {bakeOffModels.map((item, idx) => {
+                            const pName = providers.find((p) => p.id === item.provider)?.name || item.provider;
+                            return (
+                              <div key={idx} className="flex items-center justify-between bg-carbon/50 border border-aluminium/10 px-2.5 py-1.5 rounded text-xs">
+                                <span className="text-chalk truncate max-w-[170px]" title={`${pName}: ${item.model}`}>
+                                  <span className="text-aluminium/60 font-mono mr-1">[{pName}]</span>
+                                  {item.model.split('/').pop()}
+                                </span>
+                                <button
+                                  onClick={() => handleRemoveBakeOffModel(idx)}
+                                  className="text-aluminium/40 hover:text-signal text-[10px] font-mono ml-2 shrink-0"
+                                >
+                                  REMOVE
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
                       )}
-                    </datalist>
-                  </div>
+
+                      <div className="border-t border-aluminium/5 pt-2 mt-1 flex flex-col gap-2">
+                        <div className="flex gap-2">
+                          <div className="flex-1 flex flex-col gap-1">
+                            <span className="text-[10px] text-aluminium/60">Provider</span>
+                            <select
+                              value={newBakeOffProvider}
+                              onChange={(e) => {
+                                const nextP = e.target.value;
+                                setNewBakeOffProvider(nextP);
+                                if (nextP === 'together') {
+                                  setNewBakeOffModel('meta-llama/Llama-3.3-70B-Instruct-Turbo');
+                                } else if (nextP === 'openai') {
+                                  setNewBakeOffModel('gpt-4o-mini');
+                                }
+                              }}
+                              className="bg-well border border-aluminium/20 rounded p-1.5 text-xs text-chalk outline-none cursor-pointer"
+                            >
+                              {providers.map((p) => (
+                                <option key={p.id} value={p.id}>
+                                  {p.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="flex-[1.5] flex flex-col gap-1">
+                            <span className="text-[10px] text-aluminium/60">Model</span>
+                            <input
+                              type="text"
+                              value={newBakeOffModel}
+                              onChange={(e) => setNewBakeOffModel(e.target.value)}
+                              list="together-models-bakeoff"
+                              className="bg-well border border-aluminium/20 rounded p-1.5 text-xs text-chalk outline-none"
+                            />
+                            <datalist id="together-models-bakeoff">
+                              {newBakeOffProvider === 'openai' ? (
+                                <>
+                                  <option value="gpt-4o" />
+                                  <option value="gpt-4o-mini" />
+                                  <option value="gpt-3.5-turbo" />
+                                </>
+                              ) : (
+                                <>
+                                  <option value="meta-llama/Llama-3.3-70B-Instruct-Turbo" />
+                                  <option value="meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo" />
+                                  <option value="Qwen/Qwen2.5-72B-Instruct-Turbo" />
+                                  <option value="deepseek-ai/DeepSeek-V3" />
+                                </>
+                              )}
+                            </datalist>
+                          </div>
+                        </div>
+                        <button
+                          onClick={handleAddBakeOffModel}
+                          className="w-full py-1.5 rounded bg-carbon border border-aluminium/20 text-xs text-chalk hover:bg-carbon/70"
+                        >
+                          + Add Model
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      {/* Provider */}
+                      <div className="flex flex-col gap-2">
+                        <label className="text-label text-aluminium">Provider</label>
+                        <select
+                          id="launcher-provider"
+                          value={taskProvider}
+                          onChange={(e) => {
+                            const nextP = e.target.value;
+                            setTaskProvider(nextP);
+                            if (nextP === 'together') {
+                              setTaskModel('meta-llama/Llama-3.3-70B-Instruct-Turbo');
+                            } else if (nextP === 'openai') {
+                              setTaskModel('gpt-4o-mini');
+                            }
+                          }}
+                          className="bg-well border border-aluminium/20 rounded p-2.5 text-data text-chalk focus:border-chalk outline-none cursor-pointer"
+                        >
+                          {providers.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Model override */}
+                      <div className="flex flex-col gap-2">
+                        <label className="text-label text-aluminium">Model</label>
+                        <input
+                          id="launcher-model"
+                          type="text"
+                          value={taskModel}
+                          onChange={(e) => setTaskModel(e.target.value)}
+                          list="together-models-launcher"
+                          className="bg-well border border-aluminium/20 rounded p-2.5 text-data text-chalk focus:border-chalk outline-none"
+                        />
+                        <datalist id="together-models-launcher">
+                          {taskProvider === 'openai' ? (
+                            <>
+                              <option value="gpt-4o" />
+                              <option value="gpt-4o-mini" />
+                              <option value="gpt-3.5-turbo" />
+                            </>
+                          ) : (
+                            <>
+                              <option value="meta-llama/Llama-3.3-70B-Instruct-Turbo" />
+                              <option value="meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo" />
+                              <option value="Qwen/Qwen2.5-72B-Instruct-Turbo" />
+                              <option value="deepseek-ai/DeepSeek-V3" />
+                            </>
+                          )}
+                        </datalist>
+                      </div>
+                    </>
+                  )}
 
                   {/* Budget Cap ($) */}
                   <div className="flex flex-col gap-2">
@@ -745,7 +1039,7 @@ export default function App(): React.JSX.Element {
                     disabled={isLaunching || !activeRepo || !taskDescription.trim()}
                     className="w-full px-4 py-3 rounded bg-carbon border border-aluminium/20 text-body text-chalk font-semibold hover:shadow-active disabled:opacity-40 disabled:cursor-not-allowed transition-taste mb-2"
                   >
-                    {isLaunching ? 'Launching…' : 'Launch Task'}
+                    {isLaunching ? 'Launching…' : bakeOffMode ? 'Run Bake-off' : 'Launch Task'}
                   </button>
 
                   <button
@@ -940,6 +1234,10 @@ export default function App(): React.JSX.Element {
                           }
                         : undefined
                     }
+                    groupSiblings={selectedGroupSiblings}
+                    onInspectSibling={handleInspectSiblingFromHistory}
+                    onKeepGroup={handleKeepGroupFromHistory}
+                    onDiscardGroup={handleDiscardGroupFromHistory}
                   />
                 </div>
               ) : (

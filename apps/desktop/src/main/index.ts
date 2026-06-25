@@ -269,10 +269,15 @@ ipcMain.handle('murl:testConnection', async (_event, provider: string, model: st
   }
 });
 
-ipcMain.handle('murl:launchTask', async (_event, repoPath: string, prompt: string, model: string, provider: string, budgetCap: number, baseBranch?: string) => {
+ipcMain.handle('murl:launchTask', async (_event, repoPath: string, prompt: string, model: string, provider: string, budgetCap: number, baseBranch?: string, groupId?: string) => {
   if (!taskRunner) throw new Error('TaskRunner not initialized.');
   if (!mainWindow) throw new Error('Main window not available.');
-  return taskRunner.launch(repoPath, prompt, model, provider, budgetCap, mainWindow.webContents, baseBranch);
+  return taskRunner.launch(repoPath, prompt, model, provider, budgetCap, mainWindow.webContents, baseBranch, groupId);
+});
+
+ipcMain.handle('murl:getTasksByGroupId', async (_event, groupId: string) => {
+  if (!taskRunner) throw new Error('TaskRunner not initialized.');
+  return taskRunner.getTasksByGroupId(groupId);
 });
 
 ipcMain.handle('murl:keepTask', async (_event, taskId: string) => {

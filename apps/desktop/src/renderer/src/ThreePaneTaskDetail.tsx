@@ -30,6 +30,10 @@ interface ThreePaneTaskDetailProps {
   worktreePath?: string;
   onBack: () => void;
   onCancel?: () => void;
+  groupSiblings?: PersistedTask[];
+  onInspectSibling?: (taskId: string) => void;
+  onKeepGroup?: (taskId: string) => Promise<void>;
+  onDiscardGroup?: () => Promise<void>;
 }
 
 function getLanguageFromPath(filePath: string): string {
@@ -162,6 +166,10 @@ export default function ThreePaneTaskDetail({
   worktreePath,
   onBack,
   onCancel,
+  groupSiblings,
+  onInspectSibling,
+  onKeepGroup,
+  onDiscardGroup,
 }: ThreePaneTaskDetailProps) {
   const [parsedFiles, setParsedFiles] = useState<ParsedFileDiff[]>([]);
   const [selectedFile, setSelectedFile] = useState<string>('');
@@ -277,6 +285,80 @@ export default function ThreePaneTaskDetail({
 
   return (
     <div className="flex-1 flex flex-col min-h-0 h-full overflow-hidden">
+      {/* Bake-off Comparison Header */}
+      {groupSiblings && groupSiblings.length > 1 && (
+        <div className="bg-carbon/60 border border-aluminium/10 rounded-lg p-4 mb-4 flex flex-col gap-3 shrink-0">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-dot text-aluminium/50 tracking-wider font-semibold">
+              Bake-off Mode: Comparing {groupSiblings.length} Sibling Models
+            </span>
+            {onDiscardGroup && groupSiblings.some((s) => s.outcome === null) && (
+              <button
+                onClick={onDiscardGroup}
+                className="text-[10px] font-mono text-aluminium/40 hover:text-signal transition-taste px-2 py-1 rounded bg-carbon border border-aluminium/10 hover:border-signal/30"
+              >
+                Discard All Variants
+              </button>
+            )}
+          </div>
+
+          <div className="flex items-center gap-3 overflow-x-auto pb-1">
+            {groupSiblings.map((sibling) => {
+              const isActive = sibling.taskId === task.taskId;
+              const isSiblingRunning   = sibling.status === 'running';
+              const isSiblingQueued    = sibling.status === 'queued';
+              const isSiblingDone      = sibling.status === 'completed';
+              const isSiblingFailed    = sibling.status === 'failed';
+              const isSiblingCancelled = sibling.status === 'cancelled';
+              const isSiblingOverBudget = typeof sibling.costUsd === 'number' && typeof sibling.budgetCap === 'number' && sibling.costUsd > sibling.budgetCap;
+
+              const dotClass = isSiblingOverBudget
+                ? 'bg-signal shadow-signal animate-pulse-signal'
+                : isSiblingRunning
+                ? 'bg-chalk shadow-active animate-breath'
+                : isSiblingQueued
+                ? 'bg-aluminium/30'
+                : isSiblingDone
+                ? 'bg-chalk shadow-active'
+                : isSiblingFailed
+                ? 'bg-signal shadow-signal animate-pulse-signal'
+                : 'bg-aluminium/20';
+
+              const siblingStatusText = isSiblingQueued && sibling.queuePosition !== undefined
+                ? `QUEUED (${sibling.queuePosition === 0 ? 'next' : `#${sibling.queuePosition + 1}`})`
+                : sibling.status.toUpperCase();
+
+              return (
+                <button
+                  key={sibling.taskId}
+                  onClick={() => onInspectSibling && onInspectSibling(sibling.taskId)}
+                  className={`flex items-center gap-3 p-2.5 rounded border transition-all duration-200 cursor-pointer shrink-0 text-left ${
+                    isActive
+                      ? 'bg-carbon border-chalk/35 shadow-[0_0_12px_rgba(250,250,250,0.03)]'
+                      : 'bg-carbon/30 border-aluminium/10 hover:border-aluminium/20'
+                  }`}
+                >
+                  <div className={`w-2 h-2 rounded-full ${dotClass}`} />
+                  <div className="flex flex-col min-w-[120px] max-w-[180px]">
+                    <span className={`text-xs font-semibold truncate ${isActive ? 'text-chalk' : 'text-aluminium/80'}`}>
+                      {sibling.model.split('/').pop()}
+                    </span>
+                    <span className="text-[10px] text-aluminium/50 font-mono">
+                      {sibling.provider.toUpperCase()} · {siblingStatusText}
+                    </span>
+                  </div>
+                  {typeof sibling.costUsd === 'number' && (
+                    <span className={`text-[10px] font-mono font-semibold ml-2 ${isSiblingOverBudget ? 'text-signal' : 'text-aluminium/70'}`}>
+                      ${sibling.costUsd.toFixed(3)}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Header section */}
       <div className="flex flex-col gap-3 pb-4 border-b border-aluminium/10">
         <div className="flex items-center justify-between">
@@ -337,22 +419,24 @@ export default function ThreePaneTaskDetail({
             {runState === 'completed' && outcome === null && !isOutcomePending && (
               <div className="flex items-center gap-2">
                 <button
-                  onClick={handleKeep}
+                  onClick={onKeepGroup ? () => onKeepGroup(task.taskId!) : handleKeep}
                   className="px-4 py-1.5 rounded bg-carbon border border-aluminium/20 text-label text-chalk font-semibold hover:shadow-active transition-taste"
                 >
-                  Keep
+                  {onKeepGroup ? 'Keep Winner' : 'Keep'}
                 </button>
+                {!onKeepGroup && (
+                  <button
+                    onClick={handleOpenPr}
+                    className="px-4 py-1.5 rounded bg-carbon border border-aluminium/20 text-label text-chalk font-semibold hover:shadow-active transition-taste"
+                  >
+                    Open PR
+                  </button>
+                )}
                 <button
-                  onClick={handleOpenPr}
-                  className="px-4 py-1.5 rounded bg-carbon border border-aluminium/20 text-label text-chalk font-semibold hover:shadow-active transition-taste"
-                >
-                  Open PR
-                </button>
-                <button
-                  onClick={handleDiscard}
+                  onClick={onDiscardGroup ? onDiscardGroup : handleDiscard}
                   className="px-4 py-1.5 rounded bg-transparent border border-aluminium/15 text-label text-aluminium hover:text-chalk hover:border-aluminium/30 transition-taste"
                 >
-                  Discard
+                  {onDiscardGroup ? 'Discard Group' : 'Discard'}
                 </button>
               </div>
             )}

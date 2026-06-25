@@ -64,7 +64,8 @@ export class TaskRunner {
     provider: string,
     budgetCap: number,
     webContents: WebContents,
-    baseBranch?: string
+    baseBranch?: string,
+    groupId?: string
   ): Promise<string> {
     const settings = loadSettings();
 
@@ -92,6 +93,7 @@ export class TaskRunner {
       provider: provider || 'together',
       status: 'queued',
       budgetCap,
+      groupId,
     });
 
     // Notify renderer that it is queued immediately
@@ -322,6 +324,19 @@ export class TaskRunner {
       }
     }
     return record;
+  }
+
+  getTasksByGroupId(groupId: string): PersistedTask[] {
+    const list = this.store.listTasksByGroupId(groupId);
+    return list.map((task) => {
+      if (task.status === 'queued') {
+        const idx = this.queue.findIndex((q) => q.taskId === task.taskId);
+        if (idx !== -1) {
+          return { ...task, queuePosition: idx };
+        }
+      }
+      return task;
+    });
   }
 
   async keep(taskId: string): Promise<{ success: boolean; message?: string }> {

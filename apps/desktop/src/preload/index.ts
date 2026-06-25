@@ -71,12 +71,13 @@ const murlApi: MurlApi = {
   getRepoBranch: (path: string) => ipcRenderer.invoke('murl:getRepoBranch', path),
 
   // Task execution
-  launchTask: (repoPath: string, prompt: string, model: string, provider: string, budgetCap: number, baseBranch?: string) =>
-    ipcRenderer.invoke('murl:launchTask', repoPath, prompt, model, provider, budgetCap, baseBranch),
+  launchTask: (repoPath: string, prompt: string, model: string, provider: string, budgetCap: number, baseBranch?: string, groupId?: string) =>
+    ipcRenderer.invoke('murl:launchTask', repoPath, prompt, model, provider, budgetCap, baseBranch, groupId),
   cancelTask: (taskId: string) =>
     ipcRenderer.invoke('murl:cancelTask', taskId),
   getTaskHistory: () => ipcRenderer.invoke('murl:getTaskHistory'),
   getTaskRecord: (taskId: string) => ipcRenderer.invoke('murl:getTaskRecord', taskId),
+  getTasksByGroupId: (groupId: string) => ipcRenderer.invoke('murl:getTasksByGroupId', groupId),
   keepTask: (taskId: string) => ipcRenderer.invoke('murl:keepTask', taskId),
   discardTask: (taskId: string) => ipcRenderer.invoke('murl:discardTask', taskId),
   openPrTask: (taskId: string) => ipcRenderer.invoke('murl:openPrTask', taskId),
