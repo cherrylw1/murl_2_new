@@ -4,7 +4,7 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin({ exclude: ['@murl/core'] })],
+    plugins: [externalizeDepsPlugin({ exclude: ['@murl/core'], include: ['node-pty'] })],
     build: {
       lib: {
         entry: resolve(__dirname, 'src/main/index.ts'),

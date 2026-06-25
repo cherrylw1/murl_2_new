@@ -444,6 +444,11 @@ export default function App(): React.JSX.Element {
                     diff={inspectingDiff}
                     runState={inspectingRunState}
                     errorMessage={inspectingError || undefined}
+                    worktreePath={
+                      inspectingRecord.task.outcome === null
+                        ? inspectingRecord.task.worktreePath
+                        : undefined
+                    }
                     onFollowUp={
                       inspectingRunState === 'completed' && inspectingRecord.task.outcome === null
                         ? async (prompt) => {
@@ -641,6 +646,11 @@ export default function App(): React.JSX.Element {
                       selectedTaskRecord.task.status === 'failed'
                         ? (selectedTaskRecord.events.find((e) => e.type === 'status' && (e as any).error) as any)?.error ||
                           'Task execution failed'
+                        : undefined
+                    }
+                    worktreePath={
+                      selectedTaskRecord.task.outcome === null
+                        ? selectedTaskRecord.task.worktreePath
                         : undefined
                     }
                     onFollowUp={

@@ -6,6 +6,8 @@ import {
   TaskCompletePayload,
   TaskFailedPayload,
   TaskCancelledPayload,
+  TerminalDataPayload,
+  TerminalExitPayload,
 } from './types.js';
 
 // ─── Push-listener wrapper maps ───────────────────────────────────────────────
@@ -36,6 +38,8 @@ const taskEventBridge    = makePushBridge('murl:task-event');
 const taskCompleteBridge = makePushBridge('murl:task-complete');
 const taskFailedBridge   = makePushBridge('murl:task-failed');
 const taskCancelledBridge = makePushBridge('murl:task-cancelled');
+const terminalDataBridge = makePushBridge('murl:terminal-data');
+const terminalExitBridge = makePushBridge('murl:terminal-exit');
 
 // ─── Full API exposed to renderer ─────────────────────────────────────────────
 
@@ -70,6 +74,12 @@ const murlApi: MurlApi = {
   discardTask: (taskId: string) => ipcRenderer.invoke('murl:discardTask', taskId),
   followUpTask: (taskId: string, prompt: string) => ipcRenderer.invoke('murl:followUpTask', taskId, prompt),
 
+  // Terminal (pty)
+  openTerminal: (taskId: string, worktreePath: string) => ipcRenderer.invoke('murl:openTerminal', taskId, worktreePath),
+  terminalInput: (taskId: string, data: string) => ipcRenderer.invoke('murl:terminalInput', taskId, data),
+  terminalResize: (taskId: string, cols: number, rows: number) => ipcRenderer.invoke('murl:terminalResize', taskId, cols, rows),
+  closeTerminal: (taskId: string) => ipcRenderer.invoke('murl:closeTerminal', taskId),
+
   // Push event subscriptions
   onTaskEvent:    (cb) => taskEventBridge.on(cb as AnyFn),
   offTaskEvent:   (cb) => taskEventBridge.off(cb as AnyFn),
@@ -79,6 +89,12 @@ const murlApi: MurlApi = {
   offTaskFailed:  (cb) => taskFailedBridge.off(cb as AnyFn),
   onTaskCancelled:(cb) => taskCancelledBridge.on(cb as AnyFn),
   offTaskCancelled:(cb) => taskCancelledBridge.off(cb as AnyFn),
+
+  // Terminal push events
+  onTerminalData:  (cb) => terminalDataBridge.on(cb as AnyFn),
+  offTerminalData: (cb) => terminalDataBridge.off(cb as AnyFn),
+  onTerminalExit:  (cb) => terminalExitBridge.on(cb as AnyFn),
+  offTerminalExit: (cb) => terminalExitBridge.off(cb as AnyFn),
 };
 
 contextBridge.exposeInMainWorld('murl', murlApi);

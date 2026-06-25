@@ -95,6 +95,16 @@ export interface TaskCancelledPayload {
   taskId: string;
 }
 
+export interface TerminalDataPayload {
+  taskId: string;
+  data: string;
+}
+
+export interface TerminalExitPayload {
+  taskId: string;
+  exitCode: number;
+}
+
 // ─── Full window.murl API surface ─────────────────────────────────────────────
 
 export interface MurlApi {
@@ -133,6 +143,12 @@ export interface MurlApi {
   discardTask(taskId: string): Promise<{ success: boolean; message?: string }>;
   followUpTask(taskId: string, prompt: string): Promise<void>;
 
+  // Terminal (pty)
+  openTerminal(taskId: string, worktreePath: string): Promise<string>;
+  terminalInput(taskId: string, data: string): Promise<void>;
+  terminalResize(taskId: string, cols: number, rows: number): Promise<void>;
+  closeTerminal(taskId: string): Promise<void>;
+
   // Push listeners — subscribe to live task events from the main process
   onTaskEvent(cb: (payload: TaskEventPayload) => void): void;
   offTaskEvent(cb: (payload: TaskEventPayload) => void): void;
@@ -142,4 +158,10 @@ export interface MurlApi {
   offTaskFailed(cb: (payload: TaskFailedPayload) => void): void;
   onTaskCancelled(cb: (payload: TaskCancelledPayload) => void): void;
   offTaskCancelled(cb: (payload: TaskCancelledPayload) => void): void;
+
+  // Terminal push events
+  onTerminalData(cb: (payload: TerminalDataPayload) => void): void;
+  offTerminalData(cb: (payload: TerminalDataPayload) => void): void;
+  onTerminalExit(cb: (payload: TerminalExitPayload) => void): void;
+  offTerminalExit(cb: (payload: TerminalExitPayload) => void): void;
 }

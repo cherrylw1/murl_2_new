@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { MurlEvent, PersistedTask } from '../../preload/types.js';
 import { parseGitDiff, ParsedFileDiff } from './diff-parser.js';
 import Prism from 'prismjs';
+import TerminalPane from './TerminalPane.js';
 
 // Import languages for syntax highlighting
 import 'prismjs/components/prism-javascript.js';
@@ -24,6 +25,8 @@ interface ThreePaneTaskDetailProps {
   errorMessage?: string;
   /** If provided, show the follow-up input. Called when the user sends a follow-up prompt. */
   onFollowUp?: (prompt: string) => Promise<void>;
+  /** If provided, show the terminal tab. Should be the worktree path if the worktree exists. */
+  worktreePath?: string;
   onBack: () => void;
   onCancel?: () => void;
 }
@@ -155,12 +158,14 @@ export default function ThreePaneTaskDetail({
   runState,
   errorMessage,
   onFollowUp,
+  worktreePath,
   onBack,
   onCancel,
 }: ThreePaneTaskDetailProps) {
   const [parsedFiles, setParsedFiles] = useState<ParsedFileDiff[]>([]);
   const [selectedFile, setSelectedFile] = useState<string>('');
   const eventLogBottomRef = useRef<HTMLDivElement>(null);
+  const [centerTab, setCenterTab] = useState<'diff' | 'terminal'>('diff');
 
   const [outcome, setOutcome] = useState<'kept' | 'discarded' | null>((task.outcome as any) || null);
   const [outcomeError, setOutcomeError] = useState<string | null>(null);
@@ -452,18 +457,47 @@ export default function ThreePaneTaskDetail({
           </div>
         </div>
 
-        {/* CENTER PANE: Code / Diff Viewer */}
-        <div className="flex-1 bg-carbon/25 border border-aluminium/10 rounded-lg p-4 flex flex-col min-h-0 overflow-hidden">
-          <div className="text-label text-aluminium/50 mb-3 text-[10px] tracking-wider shrink-0 select-none flex justify-between items-center">
-            <span>DIFF VIEWER</span>
-            {activeFile && (
+        {/* CENTER PANE: Code / Diff Viewer + Terminal Tab */}
+        <div className="flex-1 bg-carbon/25 border border-aluminium/10 rounded-lg flex flex-col min-h-0 overflow-hidden">
+          {/* Tab switcher header */}
+          <div className="flex items-center justify-between px-4 pt-3 pb-0 shrink-0">
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setCenterTab('diff')}
+                className={`text-[10px] tracking-wider font-semibold px-2.5 py-1.5 rounded transition-taste select-none ${
+                  centerTab === 'diff'
+                    ? 'bg-carbon/80 text-chalk border border-aluminium/15'
+                    : 'text-aluminium/40 hover:text-aluminium/70 border border-transparent'
+                }`}
+              >
+                DIFF
+              </button>
+              {worktreePath && (
+                <button
+                  onClick={() => setCenterTab('terminal')}
+                  className={`text-[10px] tracking-wider font-semibold px-2.5 py-1.5 rounded transition-taste select-none ${
+                    centerTab === 'terminal'
+                      ? 'bg-carbon/80 text-chalk border border-aluminium/15'
+                      : 'text-aluminium/40 hover:text-aluminium/70 border border-transparent'
+                  }`}
+                >
+                  TERMINAL
+                </button>
+              )}
+            </div>
+            {centerTab === 'diff' && activeFile && (
               <span className="text-[9px] text-aluminium/40 font-mono uppercase bg-carbon/50 px-1.5 py-0.5 rounded border border-aluminium/10">
                 {activeFile.changeType} · {fileLanguage}
               </span>
             )}
           </div>
-
-          <div className="flex-1 min-h-0 bg-well border border-aluminium/20 rounded-lg overflow-hidden flex flex-col">
+          {/* Tab content */}
+          {centerTab === 'terminal' && worktreePath ? (
+            <div className="flex-1 min-h-0 p-3 flex flex-col overflow-hidden">
+              <TerminalPane taskId={task.taskId!} worktreePath={worktreePath} />
+            </div>
+          ) : (
+          <div className="flex-1 min-h-0 p-4 bg-well border border-aluminium/20 rounded-lg overflow-hidden flex flex-col m-3 mt-2">
             {!activeFile ? (
               <div className="flex-1 flex items-center justify-center text-aluminium/40 text-xs italic select-none">
                 {runState === 'running'
@@ -547,6 +581,7 @@ export default function ThreePaneTaskDetail({
               </div>
             )}
           </div>
+          )}
         </div>
 
         {/* RIGHT PANE: Agent Stream */}

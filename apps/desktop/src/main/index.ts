@@ -15,6 +15,7 @@ import {
   getRecentRepos
 } from './settings.js';
 import { TaskRunner } from './task-runner.js';
+import { TerminalManager } from './terminal-manager.js';
 
 const execAsync = promisify(exec);
 
@@ -22,6 +23,7 @@ let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
 let taskRunner: TaskRunner | null = null;
+let terminalManager: TerminalManager | null = null;
 
 function createDefaultMenu(): void {
   Menu.setApplicationMenu(null);
@@ -254,11 +256,15 @@ ipcMain.handle('murl:launchTask', async (_event, repoPath: string, prompt: strin
 
 ipcMain.handle('murl:keepTask', async (_event, taskId: string) => {
   if (!taskRunner) throw new Error('TaskRunner not initialized.');
+  // Close any open terminal for this task before removing its worktree
+  terminalManager?.close(taskId);
   return taskRunner.keep(taskId);
 });
 
 ipcMain.handle('murl:discardTask', async (_event, taskId: string) => {
   if (!taskRunner) throw new Error('TaskRunner not initialized.');
+  // Close any open terminal for this task before removing its worktree
+  terminalManager?.close(taskId);
   return taskRunner.discard(taskId);
 });
 
@@ -291,6 +297,7 @@ app.whenReady().then(() => {
   // Create shared TaskRunner backed by a persistent SQLite DB in userData
   const dbPath = join(app.getPath('userData'), 'murl-tasks.db');
   taskRunner = new TaskRunner(dbPath);
+  terminalManager = new TerminalManager();
 
   createDefaultMenu();
   createTray();
@@ -307,4 +314,49 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+app.on('before-quit', () => {
+  // Clean up all PTY processes before quitting — no leaked shell processes
+  terminalManager?.closeAll();
+});
+
+// ── Terminal IPC handlers ────────────────────────────────────────────────────
+
+ipcMain.handle('murl:openTerminal', async (_event, taskId: string, worktreePath: string) => {
+  if (!terminalManager) throw new Error('TerminalManager not initialized.');
+  if (!mainWindow) throw new Error('Main window not available.');
+
+  // open() enforces worktree existence — throws clearly if the worktree is gone
+  const sessionId = terminalManager.open(
+    taskId,
+    worktreePath,
+    (data: string) => {
+      try {
+        if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+          mainWindow.webContents.send('murl:terminal-data', { taskId, data });
+        }
+      } catch { /* renderer closed */ }
+    },
+    (exitCode: number) => {
+      try {
+        if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+          mainWindow.webContents.send('murl:terminal-exit', { taskId, exitCode });
+        }
+      } catch { /* renderer closed */ }
+    }
+  );
+  return sessionId;
+});
+
+ipcMain.handle('murl:terminalInput', async (_event, taskId: string, data: string) => {
+  terminalManager?.write(taskId, data);
+});
+
+ipcMain.handle('murl:terminalResize', async (_event, taskId: string, cols: number, rows: number) => {
+  terminalManager?.resize(taskId, cols, rows);
+});
+
+ipcMain.handle('murl:closeTerminal', async (_event, taskId: string) => {
+  terminalManager?.close(taskId);
 });
