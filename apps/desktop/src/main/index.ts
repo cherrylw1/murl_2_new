@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, Tray, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, Tray, dialog, nativeImage } from 'electron';
 import { join } from 'path';
 import { noop, Recipe } from '@murl/core';
 import * as fs from 'fs';
@@ -34,40 +34,51 @@ function createDefaultMenu(): void {
 }
 
 function createTray(): void {
-  // Path resolution for tray icon
-  const iconPath = app.isPackaged
-    ? join(process.resourcesPath, 'icon.png')
-    : join(__dirname, '../../resources/icon.png');
+  try {
+    // Path resolution for tray icon
+    // In packaged builds, extraResources places icon.png directly in process.resourcesPath
+    const iconPath = app.isPackaged
+      ? join(process.resourcesPath, 'icon.png')
+      : join(__dirname, '../../resources/icon.png');
 
-  tray = new Tray(iconPath);
-  tray.setToolTip('Murl');
+    const icon = nativeImage.createFromPath(iconPath);
+    if (icon.isEmpty()) {
+      throw new Error(`Icon at ${iconPath} is empty or invalid`);
+    }
 
-  const contextMenu = Menu.buildFromTemplate([
-    {
-      label: 'Show App',
-      click: () => {
-        if (mainWindow) {
-          mainWindow.show();
+    tray = new Tray(icon);
+    tray.setToolTip('Murl');
+
+    const contextMenu = Menu.buildFromTemplate([
+      {
+        label: 'Show App',
+        click: () => {
+          if (mainWindow) {
+            mainWindow.show();
+          }
+        }
+      },
+      { type: 'separator' },
+      {
+        label: 'Quit',
+        click: () => {
+          isQuitting = true;
+          app.quit();
         }
       }
-    },
-    { type: 'separator' },
-    {
-      label: 'Quit',
-      click: () => {
-        isQuitting = true;
-        app.quit();
+    ]);
+
+    tray.setContextMenu(contextMenu);
+
+    tray.on('click', () => {
+      if (mainWindow) {
+        mainWindow.show();
       }
-    }
-  ]);
-
-  tray.setContextMenu(contextMenu);
-
-  tray.on('click', () => {
-    if (mainWindow) {
-      mainWindow.show();
-    }
-  });
+    });
+  } catch (err) {
+    console.warn('[Tray] Failed to create tray icon:', err);
+    // App continues without tray — window is still functional
+  }
 }
 
 function createWindow(): void {

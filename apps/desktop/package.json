@@ -1,6 +1,12 @@
 {
   "name": "@murl/desktop",
   "version": "1.0.0",
+  "description": "Murl — AI coding harness for developers",
+  "author": "Murl",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cherrylw1/murl_2_new"
+  },
   "main": "out/main/index.js",
   "scripts": {
     "predev": "pnpm --filter @murl/core build",
@@ -9,12 +15,14 @@
     "build": "electron-vite build",
     "prestart": "pnpm --filter @murl/core build",
     "start": "electron-vite preview",
-    "typecheck": "tsc -b"
+    "typecheck": "tsc -b",
+    "package:win": "pnpm build && electron-builder --win"
   },
   "dependencies": {
     "@murl/core": "workspace:*",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
+    "node-pty": "^1.1.0",
     "prismjs": "^1.30.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
@@ -28,9 +36,9 @@
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.5.0",
     "electron": "^35.7.5",
+    "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
     "geist": "^1.7.2",
-    "node-pty": "^1.1.0",
     "postcss": "^8.5.15",
     "tailwindcss": "^3.4.17",
     "vite": "^5.4.15"

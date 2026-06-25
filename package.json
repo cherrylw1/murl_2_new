@@ -6,7 +6,8 @@
   "scripts": {
     "typecheck": "tsc -b",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "package:win": "pnpm --filter @murl/desktop package:win"
   },
   "devDependencies": {
     "@opencode-ai/sdk": "^1.17.9",
