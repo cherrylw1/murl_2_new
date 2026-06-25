@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, Menu, Tray, dialog } from 'electron';
 import { join } from 'path';
-import { noop } from '@murl/core';
+import { noop, Recipe } from '@murl/core';
 import * as fs from 'fs';
 import { exec } from 'child_process';
 import { promisify } from 'util';
@@ -12,7 +12,9 @@ import {
   isApiKeyConfigured,
   HarnessSettings,
   addRecentRepo,
-  getRecentRepos
+  getRecentRepos,
+  loadProviderKeys,
+  saveProviderKey
 } from './settings.js';
 import { TaskRunner } from './task-runner.js';
 import { TerminalManager } from './terminal-manager.js';
@@ -185,15 +187,22 @@ ipcMain.handle('murl:getRepoBranch', async (_event, repoPath: string) => {
 
 ipcMain.handle('murl:getSettingsStatus', async () => {
   const settings = loadSettings();
-  const apiKeyConfigured = isApiKeyConfigured();
+  const keys = loadProviderKeys();
+  const configuredProviders: Record<string, boolean> = {};
+  for (const p of settings.providers || []) {
+    configuredProviders[p.id] = !!keys[p.id];
+  }
   return {
-    apiKeyConfigured,
+    configuredProviders,
     settings
   };
 });
 
 ipcMain.handle('murl:saveApiKey', async (_event, provider: string, apiKey: string) => {
-  saveApiKey(apiKey);
+  saveProviderKey(provider, apiKey);
+  if (provider === 'together') {
+    process.env.TOGETHER_API_KEY = apiKey;
+  }
 });
 
 ipcMain.handle('murl:saveHarnessSettings', async (_event, settings: HarnessSettings) => {
@@ -201,16 +210,26 @@ ipcMain.handle('murl:saveHarnessSettings', async (_event, settings: HarnessSetti
 });
 
 ipcMain.handle('murl:testConnection', async (_event, provider: string, model: string) => {
-  const apiKey = process.env.TOGETHER_API_KEY;
+  const settings = loadSettings();
+  const providerConfig = settings.providers?.find(p => p.id === provider);
+  if (!providerConfig) {
+    return {
+      success: false,
+      message: `Provider '${provider}' not found in settings.`
+    };
+  }
+
+  const keys = loadProviderKeys();
+  const apiKey = keys[provider];
   if (!apiKey) {
     return {
       success: false,
-      message: 'No API key configured.'
+      message: `No API key configured for ${providerConfig.name}.`
     };
   }
 
   try {
-    const url = 'https://api.together.xyz/v1/chat/completions';
+    const url = `${providerConfig.baseURL.replace(/\/$/, '')}/chat/completions`;
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -227,7 +246,7 @@ ipcMain.handle('murl:testConnection', async (_event, provider: string, model: st
     if (response.ok) {
       return {
         success: true,
-        message: 'Successfully connected to Together AI API.'
+        message: `Successfully connected to ${providerConfig.name} API.`
       };
     } else {
       let errText = '';
@@ -250,10 +269,10 @@ ipcMain.handle('murl:testConnection', async (_event, provider: string, model: st
   }
 });
 
-ipcMain.handle('murl:launchTask', async (_event, repoPath: string, prompt: string, model: string, baseBranch?: string) => {
+ipcMain.handle('murl:launchTask', async (_event, repoPath: string, prompt: string, model: string, provider: string, budgetCap: number, baseBranch?: string) => {
   if (!taskRunner) throw new Error('TaskRunner not initialized.');
   if (!mainWindow) throw new Error('Main window not available.');
-  return taskRunner.launch(repoPath, prompt, model, mainWindow.webContents, baseBranch);
+  return taskRunner.launch(repoPath, prompt, model, provider, budgetCap, mainWindow.webContents, baseBranch);
 });
 
 ipcMain.handle('murl:keepTask', async (_event, taskId: string) => {
@@ -270,6 +289,11 @@ ipcMain.handle('murl:discardTask', async (_event, taskId: string) => {
   terminalManager?.close(taskId);
   previewManager?.stop(taskId);
   return taskRunner.discard(taskId);
+});
+
+ipcMain.handle('murl:openPrTask', async (_event, taskId: string) => {
+  if (!taskRunner) throw new Error('TaskRunner not initialized.');
+  return taskRunner.openPr(taskId);
 });
 
 ipcMain.handle('murl:followUpTask', async (_event, taskId: string, prompt: string) => {
@@ -293,6 +317,21 @@ ipcMain.handle('murl:getTaskHistory', async () => {
 ipcMain.handle('murl:getTaskRecord', async (_event, taskId: string) => {
   if (!taskRunner) return null;
   return taskRunner.getRecord(taskId);
+});
+
+ipcMain.handle('murl:createRecipe', async (_event, recipe: Omit<Recipe, 'id'>) => {
+  if (!taskRunner) throw new Error('TaskRunner not initialized.');
+  return taskRunner.createRecipe(recipe);
+});
+
+ipcMain.handle('murl:listRecipes', async () => {
+  if (!taskRunner) return [];
+  return taskRunner.listRecipes();
+});
+
+ipcMain.handle('murl:deleteRecipe', async (_event, id: string) => {
+  if (!taskRunner) throw new Error('TaskRunner not initialized.');
+  return taskRunner.deleteRecipe(id);
 });
 
 app.whenReady().then(() => {
@@ -406,6 +445,11 @@ ipcMain.handle('murl:stopPreview', async (_event, taskId: string) => {
 
 /** Open the detected preview URL in the default system browser. */
 ipcMain.handle('murl:openPreviewUrl', async (_event, url: string) => {
+  const { shell } = await import('electron');
+  await shell.openExternal(url);
+});
+
+ipcMain.handle('murl:openUrl', async (_event, url: string) => {
   const { shell } = await import('electron');
   await shell.openExternal(url);
 });

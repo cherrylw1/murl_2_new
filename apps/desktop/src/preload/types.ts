@@ -1,4 +1,8 @@
-// ─── Repo / Settings (existing) ──────────────────────────────────────────────
+export interface ProviderConfig {
+  id: string;
+  name: string;
+  baseURL: string;
+}
 
 export interface RecentRepo {
   path: string;
@@ -14,6 +18,8 @@ export interface HarnessSettings {
   openCodePathOverride: string;
   perTaskBudgetDefault: number;
   recentRepos: RecentRepo[];
+  providers: ProviderConfig[];
+  budgetGuardAction: 'warn' | 'halt';
 }
 
 // ─── Task event types (mirrors @murl/core — defined here so the renderer
@@ -46,7 +52,14 @@ export interface MurlActionEvent {
   status: 'pending' | 'running' | 'completed' | 'failed';
 }
 
-export type MurlEvent = MurlStatusEvent | MurlMessageEvent | MurlActionEvent;
+export interface MurlCostEvent {
+  type: 'cost';
+  tokensIn: number;
+  tokensOut: number;
+  costUsd: number;
+}
+
+export type MurlEvent = MurlStatusEvent | MurlMessageEvent | MurlActionEvent | MurlCostEvent;
 
 // ─── Persisted task record (mirrors @murl/core TaskStore types) ───────────────
 
@@ -63,15 +76,40 @@ export interface PersistedTask {
   status: string;
   createdAt: number;
   completedAt: number | null;
-  outcome: 'kept' | 'discarded' | null;
+  outcome: 'kept' | 'discarded' | 'pr-opened' | null;
+  prUrl?: string | null;
   queuePosition?: number;
+  budgetCap?: number | null;
+  costUsd?: number | null;
+  tokensIn?: number | null;
+  tokensOut?: number | null;
+}
+
+export interface PersistedCost {
+  taskId: string;
+  tokensIn: number;
+  tokensOut: number;
+  costUsd: number;
+  recordedAt: number;
 }
 
 export interface TaskRecord {
   task: PersistedTask;
   events: MurlEvent[];
   diff: string | null;
-  cost: null;
+  cost: PersistedCost | null;
+}
+
+export interface Recipe {
+  id: string;
+  name: string;
+  description?: string | null;
+  repoPath: string;
+  prompt: string;
+  model: string;
+  provider: string;
+  baseBranch?: string | null;
+  budgetCap?: number | null;
 }
 
 // ─── Push-event payloads ──────────────────────────────────────────────────────
@@ -132,7 +170,7 @@ export interface MurlApi {
 
   // Settings
   getSettingsStatus(): Promise<{
-    apiKeyConfigured: boolean;
+    configuredProviders: Record<string, boolean>;
     settings: HarnessSettings;
   }>;
   saveApiKey(provider: string, apiKey: string): Promise<void>;
@@ -150,13 +188,19 @@ export interface MurlApi {
   getRepoBranch(path: string): Promise<string>;
 
   // Task execution
-  launchTask(repoPath: string, prompt: string, model: string, baseBranch?: string): Promise<string>;
+  launchTask(repoPath: string, prompt: string, model: string, provider: string, budgetCap: number, baseBranch?: string): Promise<string>;
   cancelTask(taskId: string): Promise<void>;
   getTaskHistory(): Promise<PersistedTask[]>;
   getTaskRecord(taskId: string): Promise<TaskRecord | null>;
   keepTask(taskId: string): Promise<{ success: boolean; message?: string }>;
   discardTask(taskId: string): Promise<{ success: boolean; message?: string }>;
+  openPrTask(taskId: string): Promise<{ success: boolean; prUrl?: string; message?: string }>;
   followUpTask(taskId: string, prompt: string): Promise<void>;
+
+  // Recipes
+  createRecipe(recipe: Omit<Recipe, 'id'>): Promise<Recipe>;
+  listRecipes(): Promise<Recipe[]>;
+  deleteRecipe(id: string): Promise<void>;
 
   // Terminal (pty)
   openTerminal(taskId: string, worktreePath: string): Promise<string>;
@@ -185,6 +229,7 @@ export interface MurlApi {
   startPreview(taskId: string, worktreePath: string, command: string): Promise<void>;
   stopPreview(taskId: string): Promise<void>;
   openPreviewUrl(url: string): Promise<void>;
+  openUrl(url: string): Promise<void>;
 
   // Preview push events
   onPreviewLog(cb: (payload: PreviewLogPayload) => void): void;

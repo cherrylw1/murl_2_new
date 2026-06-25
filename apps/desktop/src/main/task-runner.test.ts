@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { TaskRunner } from './task-runner.js';
+import { TaskRunner, setExecHook, execHook } from './task-runner.js';
 import { TaskStore, OpenCodeAdapter } from '@murl/core';
 import * as settingsModule from './settings.js';
 
@@ -26,6 +26,7 @@ vi.mock('electron', () => {
     }
   };
 });
+
 
 describe('TaskRunner Keep Safety tests', () => {
   const scratchDir = path.resolve('./scratch/test-taskrunner');
@@ -174,6 +175,8 @@ describe('TaskRunner Keep Safety tests', () => {
       baseRepoPath,
       'Add a new greeting file',
       'test-model',
+      'together',
+      10.0,
       mockWebContents,
       'main'
     );
@@ -238,6 +241,8 @@ describe('TaskRunner Keep Safety tests', () => {
       baseRepoPath,
       'Modify README',
       'test-model',
+      'together',
+      10.0,
       mockWebContents,
       'main'
     );
@@ -286,6 +291,8 @@ describe('TaskRunner Keep Safety tests', () => {
       baseRepoPath,
       'Create conflict',
       'test-model',
+      'together',
+      10.0,
       mockWebContents,
       'main'
     );
@@ -346,6 +353,10 @@ describe('TaskRunner Keep Safety tests', () => {
       openCodePathOverride: '',
       perTaskBudgetDefault: 10,
       recentRepos: [],
+      providers: [
+        { id: 'together', name: 'Together', baseURL: 'https://api.together.xyz/v1' }
+      ],
+      budgetGuardAction: 'warn',
     });
 
     const mockWebContents: any = {
@@ -354,9 +365,9 @@ describe('TaskRunner Keep Safety tests', () => {
     };
 
     // 1. Launch 3 tasks in quick succession
-    const taskId1 = await runner.launch(baseRepoPath, 'Task 1', 'test-model', mockWebContents, 'main');
-    const taskId2 = await runner.launch(baseRepoPath, 'Task 2', 'test-model', mockWebContents, 'main');
-    const taskId3 = await runner.launch(baseRepoPath, 'Task 3', 'test-model', mockWebContents, 'main');
+    const taskId1 = await runner.launch(baseRepoPath, 'Task 1', 'test-model', 'together', 10.0, mockWebContents, 'main');
+    const taskId2 = await runner.launch(baseRepoPath, 'Task 2', 'test-model', 'together', 10.0, mockWebContents, 'main');
+    const taskId3 = await runner.launch(baseRepoPath, 'Task 3', 'test-model', 'together', 10.0, mockWebContents, 'main');
 
     // Wait for task 1 and task 2 to start running (robust polling)
     await waitForTaskRunning(runner, taskId1);
@@ -388,7 +399,7 @@ describe('TaskRunner Keep Safety tests', () => {
     await waitForTaskCompletion(runner, taskId1);
 
     // Wait for stagger delay + start tick
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await waitForTaskRunning(runner, taskId3);
 
     // Verify Task 3 is now running and its worktree is created
     const record3Running = runner.getRecord(taskId3);
@@ -411,6 +422,10 @@ describe('TaskRunner Keep Safety tests', () => {
       openCodePathOverride: '',
       perTaskBudgetDefault: 10,
       recentRepos: [],
+      providers: [
+        { id: 'together', name: 'Together', baseURL: 'https://api.together.xyz/v1' }
+      ],
+      budgetGuardAction: 'warn',
     });
 
     const mockWebContents: any = {
@@ -419,8 +434,8 @@ describe('TaskRunner Keep Safety tests', () => {
     };
 
     // 1. Launch 2 tasks
-    const taskId1 = await runner.launch(baseRepoPath, 'Task 1', 'test-model', mockWebContents, 'main');
-    const taskId2 = await runner.launch(baseRepoPath, 'Task 2', 'test-model', mockWebContents, 'main');
+    const taskId1 = await runner.launch(baseRepoPath, 'Task 1', 'test-model', 'together', 10.0, mockWebContents, 'main');
+    const taskId2 = await runner.launch(baseRepoPath, 'Task 2', 'test-model', 'together', 10.0, mockWebContents, 'main');
 
     // Wait for task 1 to start
     await new Promise((resolve) => setTimeout(resolve, 400));
@@ -438,5 +453,213 @@ describe('TaskRunner Keep Safety tests', () => {
 
     // Verify no worktree was created for task 2
     expect(fs.existsSync(record2!.task.worktreePath)).toBe(false);
+  });
+
+  it('should successfully open a PR and update task outcome and url without removing worktree', async () => {
+    const runner = new TaskRunner(dbPath);
+    runners.push(runner);
+
+    const mockWebContents: any = {
+      isDestroyed: () => false,
+      send: vi.fn(),
+    };
+
+    // 1. Launch a task
+    const taskId = await runner.launch(
+      baseRepoPath,
+      'Feature: add unit tests for openPr',
+      'test-model',
+      'together',
+      10.0,
+      mockWebContents,
+      'main'
+    );
+
+    await waitForTaskRunning(runner, taskId);
+    await waitForTaskCompletion(runner, taskId);
+
+    const completedRecord = runner.getRecord(taskId);
+    expect(completedRecord!.task.status).toBe('completed');
+    const worktreePath = completedRecord!.task.worktreePath;
+
+    // Set the exec hook mock
+    const originalExec = execHook;
+    const mockFunc = ((cmd: string, opts: any, callback: any) => {
+      const cb = typeof opts === 'function' ? opts : callback;
+      cb(null, '', '');
+      return {} as any;
+    }) as any;
+    mockFunc[promisify.custom] = async (cmd: string, opts: any) => {
+      if (cmd.includes('gh auth status')) {
+        return { stdout: 'Logged in to github.com', stderr: '' };
+      } else if (cmd.includes('git push')) {
+        return { stdout: 'branch pushed', stderr: '' };
+      } else if (cmd.includes('gh pr create')) {
+        return { stdout: 'https://github.com/cherrylw1/murl_2_new/pull/123\n', stderr: '' };
+      } else {
+        return { stdout: '', stderr: '' };
+      }
+    };
+    setExecHook(mockFunc);
+
+    try {
+      // 2. Open PR
+      const prResult = await runner.openPr(taskId);
+      expect(prResult.success).toBe(true);
+      expect(prResult.prUrl).toBe('https://github.com/cherrylw1/murl_2_new/pull/123');
+
+      // 3. Verify task outcome and prUrl in store
+      const updatedRecord = runner.getRecord(taskId);
+      expect(updatedRecord!.task.outcome).toBe('pr-opened');
+      expect(updatedRecord!.task.prUrl).toBe('https://github.com/cherrylw1/murl_2_new/pull/123');
+
+      // 4. Verify worktree still exists on disk
+      expect(fs.existsSync(worktreePath)).toBe(true);
+    } finally {
+      setExecHook(originalExec);
+    }
+  });
+
+  it('should support dynamic providers and set environment variable with decrypted key', async () => {
+    const runner = new TaskRunner(dbPath);
+    runners.push(runner);
+
+    const customProvider = {
+      id: 'custom-provider-id',
+      name: 'Custom Provider Name',
+      baseURL: 'https://api.custom-provider.com/v1'
+    };
+
+    vi.spyOn(settingsModule, 'loadSettings').mockReturnValue({
+      provider: 'custom-provider-id',
+      model: 'custom-model',
+      defaultRepoPath: baseRepoPath,
+      worktreeRoot: worktreesRoot,
+      concurrencyCap: 2,
+      openCodePathOverride: '',
+      perTaskBudgetDefault: 10,
+      recentRepos: [],
+      providers: [
+        { id: 'together', name: 'Together', baseURL: 'https://api.together.xyz/v1' },
+        customProvider
+      ],
+      budgetGuardAction: 'warn',
+    });
+
+    vi.spyOn(settingsModule, 'loadProviderKeys').mockReturnValue({
+      'custom-provider-id': 'custom-api-key-value'
+    });
+
+    const runTaskSpy = vi.spyOn(OpenCodeAdapter.prototype, 'runTask');
+
+    const mockWebContents: any = {
+      isDestroyed: () => false,
+      send: vi.fn(),
+    };
+
+    const taskId = await runner.launch(
+      baseRepoPath,
+      'Test multi-provider task',
+      'custom-model',
+      'custom-provider-id',
+      10.0,
+      mockWebContents,
+      'main'
+    );
+
+    await waitForTaskRunning(runner, taskId);
+    await waitForTaskCompletion(runner, taskId);
+
+    const runTaskCalls = runTaskSpy.mock.calls;
+    const customCall = runTaskCalls.find(call => call[0].includes(taskId));
+    expect(customCall).toBeDefined();
+    const modelConfig = customCall![2];
+    expect(modelConfig).toBeDefined();
+    expect(modelConfig!.providerId).toBe('custom-provider-id');
+    expect(modelConfig!.providerName).toBe('Custom Provider Name');
+    expect(modelConfig!.providerBaseURL).toBe('https://api.custom-provider.com/v1');
+    expect(modelConfig!.apiKeyEnvVarName).toBe(`MURL_API_KEY_${taskId}`);
+    expect(modelConfig!.apiKeyVal).toBe('custom-api-key-value');
+  });
+
+  it('should abort and cancel the task if budgetGuardAction is halt and cost exceeds budgetCap', async () => {
+    const runner = new TaskRunner(dbPath);
+    runners.push(runner);
+
+    // Mock settings with budgetGuardAction = 'halt'
+    vi.spyOn(settingsModule, 'loadSettings').mockReturnValue({
+      provider: 'together',
+      model: 'test-model',
+      defaultRepoPath: baseRepoPath,
+      worktreeRoot: worktreesRoot,
+      concurrencyCap: 2,
+      openCodePathOverride: '',
+      perTaskBudgetDefault: 0.05,
+      recentRepos: [],
+      providers: [
+        { id: 'together', name: 'Together', baseURL: 'https://api.together.xyz/v1' }
+      ],
+      budgetGuardAction: 'halt',
+    });
+
+    // Mock runTask implementation to trigger a cost event that exceeds the budget cap ($0.01)
+    let abortSignalObserved: AbortSignal | undefined;
+    vi.spyOn(OpenCodeAdapter.prototype, 'runTask').mockImplementation(
+      async (worktreePath, prompt, config, onEvent, signal) => {
+        abortSignalObserved = signal;
+        return new Promise((resolve, reject) => {
+          // Monitor if the signal gets aborted
+          if (signal) {
+            if (signal.aborted) {
+              reject(new Error('Task was cancelled.'));
+              return;
+            }
+            signal.addEventListener('abort', () => {
+              reject(new Error('Task was cancelled.'));
+            });
+          }
+
+          // Delay the cost event trigger so that waitForTaskRunning can see the task as 'running' first
+          setTimeout(() => {
+            if (onEvent) {
+              onEvent({
+                type: 'cost',
+                tokensIn: 100000,
+                tokensOut: 100000,
+                costUsd: 0.5, // Exceeds budget cap of 0.01
+              });
+            }
+          }, 100);
+
+          // Don't resolve immediately to let the abortion take place
+          setTimeout(() => {
+            resolve({ events: [], diff: '' });
+          }, 1000);
+        });
+      }
+    );
+
+    const mockWebContents: any = {
+      isDestroyed: () => false,
+      send: vi.fn(),
+    };
+
+    const taskId = await runner.launch(
+      baseRepoPath,
+      'Test budget guard halt',
+      'test-model',
+      'together',
+      0.01, // Budget cap is 0.01
+      mockWebContents,
+      'main'
+    );
+
+    await waitForTaskRunning(runner, taskId);
+    await waitForTaskCompletion(runner, taskId);
+
+    const record = runner.getRecord(taskId);
+    expect(record).toBeDefined();
+    expect(record!.task.status).toBe('cancelled');
+    expect(abortSignalObserved?.aborted).toBe(true);
   });
 });

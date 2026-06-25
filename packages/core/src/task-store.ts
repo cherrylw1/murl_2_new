@@ -20,8 +20,14 @@ export interface PersistedTask {
   status: string;
   createdAt: number;
   completedAt: number | null;
-  outcome: 'kept' | 'discarded' | null;
+  outcome: 'kept' | 'discarded' | 'pr-opened' | null;
+  /** The real GitHub PR URL, set when outcome === 'pr-opened'. */
+  prUrl?: string | null;
   queuePosition?: number;
+  budgetCap?: number | null;
+  costUsd?: number | null;
+  tokensIn?: number | null;
+  tokensOut?: number | null;
 }
 
 export interface PersistedCost {
@@ -37,6 +43,18 @@ export interface TaskRecord {
   events: MurlEvent[];
   diff: string | null;
   cost: PersistedCost | null;
+}
+
+export interface Recipe {
+  id: string;
+  name: string;
+  description?: string | null;
+  repoPath: string;
+  prompt: string;
+  model: string;
+  provider: string;
+  baseBranch?: string | null;
+  budgetCap?: number | null;
 }
 
 export class TaskStore {
@@ -70,7 +88,8 @@ export class TaskStore {
         status TEXT NOT NULL,
         createdAt INTEGER NOT NULL,
         completedAt INTEGER,
-        outcome TEXT
+        outcome TEXT,
+        budgetCap REAL
       );
 
       CREATE TABLE IF NOT EXISTS events (
@@ -98,6 +117,18 @@ export class TaskStore {
         recordedAt INTEGER NOT NULL,
         FOREIGN KEY(taskId) REFERENCES tasks(taskId) ON DELETE CASCADE
       );
+
+      CREATE TABLE IF NOT EXISTS recipes (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        repoPath TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        model TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        baseBranch TEXT,
+        budgetCap REAL
+      );
     `);
 
     // Safely add new columns if they do not exist
@@ -116,6 +147,16 @@ export class TaskStore {
     } catch {
       // Swallowed since the column likely already exists
     }
+    try {
+      this.db.exec('ALTER TABLE tasks ADD COLUMN prUrl TEXT;');
+    } catch {
+      // Swallowed since the column likely already exists
+    }
+    try {
+      this.db.exec('ALTER TABLE tasks ADD COLUMN budgetCap REAL;');
+    } catch {
+      // Swallowed since the column likely already exists
+    }
   }
 
   createTask(task: Omit<PersistedTask, 'id' | 'createdAt' | 'completedAt' | 'outcome'>): PersistedTask {
@@ -125,8 +166,8 @@ export class TaskStore {
     const completedAt = null;
 
     const stmt = this.db.prepare(`
-      INSERT INTO tasks (id, taskId, worktreePath, branch, baseBranch, repoPath, prompt, model, provider, status, createdAt, completedAt, outcome)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tasks (id, taskId, worktreePath, branch, baseBranch, repoPath, prompt, model, provider, status, createdAt, completedAt, outcome, budgetCap)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
@@ -142,7 +183,8 @@ export class TaskStore {
       task.status,
       createdAt,
       completedAt,
-      outcome
+      outcome,
+      task.budgetCap || null
     );
 
     return {
@@ -159,6 +201,7 @@ export class TaskStore {
       createdAt,
       completedAt,
       outcome,
+      budgetCap: task.budgetCap || null,
     };
   }
 
@@ -172,9 +215,18 @@ export class TaskStore {
     }
   }
 
-  setOutcome(taskId: string, outcome: 'kept' | 'discarded'): void {
+  setOutcome(taskId: string, outcome: 'kept' | 'discarded' | 'pr-opened'): void {
     const stmt = this.db.prepare('UPDATE tasks SET outcome = ? WHERE taskId = ?');
     stmt.run(outcome, taskId);
+  }
+
+  /**
+   * Stores the real GitHub PR URL returned by `gh pr create`.
+   * Called immediately after setOutcome('pr-opened').
+   */
+  setPrUrl(taskId: string, prUrl: string): void {
+    const stmt = this.db.prepare('UPDATE tasks SET prUrl = ? WHERE taskId = ?');
+    stmt.run(prUrl, taskId);
   }
 
   /**
@@ -234,8 +286,13 @@ export class TaskStore {
   }
 
   getTask(taskId: string): TaskRecord | null {
-    const taskStmt = this.db.prepare('SELECT * FROM tasks WHERE taskId = ?');
-    const taskRow = taskStmt.get(taskId) as PersistedTask | undefined;
+    const taskStmt = this.db.prepare(`
+      SELECT t.*, c.costUsd, c.tokensIn, c.tokensOut
+      FROM tasks t
+      LEFT JOIN cost c ON t.taskId = c.taskId
+      WHERE t.taskId = ?
+    `);
+    const taskRow = taskStmt.get(taskId) as any;
     if (!taskRow) return null;
 
     // Map outcomes and completion values correctly
@@ -244,8 +301,13 @@ export class TaskStore {
       completedAt: taskRow.completedAt === null ? null : Number(taskRow.completedAt),
       createdAt: Number(taskRow.createdAt),
       outcome: taskRow.outcome as any,
+      prUrl: taskRow.prUrl ?? null,
       baseBranch: taskRow.baseBranch || 'main',
       repoPath: taskRow.repoPath || '',
+      budgetCap: taskRow.budgetCap !== null && taskRow.budgetCap !== undefined ? Number(taskRow.budgetCap) : null,
+      costUsd: taskRow.costUsd !== null && taskRow.costUsd !== undefined ? Number(taskRow.costUsd) : null,
+      tokensIn: taskRow.tokensIn !== null && taskRow.tokensIn !== undefined ? Number(taskRow.tokensIn) : null,
+      tokensOut: taskRow.tokensOut !== null && taskRow.tokensOut !== undefined ? Number(taskRow.tokensOut) : null,
     };
 
     // Query events
@@ -280,19 +342,73 @@ export class TaskStore {
   }
 
   listTasks(): PersistedTask[] {
-    const stmt = this.db.prepare('SELECT * FROM tasks ORDER BY createdAt DESC');
-    const rows = stmt.all() as unknown as PersistedTask[];
+    const stmt = this.db.prepare(`
+      SELECT t.*, c.costUsd, c.tokensIn, c.tokensOut
+      FROM tasks t
+      LEFT JOIN cost c ON t.taskId = c.taskId
+      ORDER BY t.createdAt DESC
+    `);
+    const rows = stmt.all() as any[];
     return rows.map((row) => ({
       ...row,
       completedAt: row.completedAt === null ? null : Number(row.completedAt),
       createdAt: Number(row.createdAt),
       outcome: row.outcome as any,
+      prUrl: row.prUrl ?? null,
       baseBranch: row.baseBranch || 'main',
       repoPath: row.repoPath || '',
+      budgetCap: row.budgetCap !== null && row.budgetCap !== undefined ? Number(row.budgetCap) : null,
+      costUsd: row.costUsd !== null && row.costUsd !== undefined ? Number(row.costUsd) : null,
+      tokensIn: row.tokensIn !== null && row.tokensIn !== undefined ? Number(row.tokensIn) : null,
+      tokensOut: row.tokensOut !== null && row.tokensOut !== undefined ? Number(row.tokensOut) : null,
     }));
   }
 
   close(): void {
     this.db.close();
+  }
+
+  createRecipe(recipe: Omit<Recipe, 'id'>): Recipe {
+    const id = crypto.randomUUID();
+    const stmt = this.db.prepare(`
+      INSERT INTO recipes (id, name, description, repoPath, prompt, model, provider, baseBranch, budgetCap)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+      id,
+      recipe.name,
+      recipe.description || null,
+      recipe.repoPath,
+      recipe.prompt,
+      recipe.model,
+      recipe.provider,
+      recipe.baseBranch || null,
+      recipe.budgetCap || null
+    );
+    return {
+      id,
+      ...recipe,
+    };
+  }
+
+  listRecipes(): Recipe[] {
+    const stmt = this.db.prepare('SELECT * FROM recipes ORDER BY name ASC');
+    const rows = stmt.all() as any[];
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      description: row.description,
+      repoPath: row.repoPath,
+      prompt: row.prompt,
+      model: row.model,
+      provider: row.provider,
+      baseBranch: row.baseBranch,
+      budgetCap: row.budgetCap !== null && row.budgetCap !== undefined ? Number(row.budgetCap) : null,
+    }));
+  }
+
+  deleteRecipe(id: string): void {
+    const stmt = this.db.prepare('DELETE FROM recipes WHERE id = ?');
+    stmt.run(id);
   }
 }

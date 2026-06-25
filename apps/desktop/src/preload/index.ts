@@ -11,6 +11,7 @@ import {
   PreviewLogPayload,
   PreviewUrlPayload,
   PreviewExitPayload,
+  Recipe,
 } from './types.js';
 
 // ─── Push-listener wrapper maps ───────────────────────────────────────────────
@@ -70,15 +71,21 @@ const murlApi: MurlApi = {
   getRepoBranch: (path: string) => ipcRenderer.invoke('murl:getRepoBranch', path),
 
   // Task execution
-  launchTask: (repoPath: string, prompt: string, model: string, baseBranch?: string) =>
-    ipcRenderer.invoke('murl:launchTask', repoPath, prompt, model, baseBranch),
+  launchTask: (repoPath: string, prompt: string, model: string, provider: string, budgetCap: number, baseBranch?: string) =>
+    ipcRenderer.invoke('murl:launchTask', repoPath, prompt, model, provider, budgetCap, baseBranch),
   cancelTask: (taskId: string) =>
     ipcRenderer.invoke('murl:cancelTask', taskId),
   getTaskHistory: () => ipcRenderer.invoke('murl:getTaskHistory'),
   getTaskRecord: (taskId: string) => ipcRenderer.invoke('murl:getTaskRecord', taskId),
   keepTask: (taskId: string) => ipcRenderer.invoke('murl:keepTask', taskId),
   discardTask: (taskId: string) => ipcRenderer.invoke('murl:discardTask', taskId),
+  openPrTask: (taskId: string) => ipcRenderer.invoke('murl:openPrTask', taskId),
   followUpTask: (taskId: string, prompt: string) => ipcRenderer.invoke('murl:followUpTask', taskId, prompt),
+
+  // Recipes
+  createRecipe: (recipe: Omit<Recipe, 'id'>) => ipcRenderer.invoke('murl:createRecipe', recipe),
+  listRecipes: () => ipcRenderer.invoke('murl:listRecipes'),
+  deleteRecipe: (id: string) => ipcRenderer.invoke('murl:deleteRecipe', id),
 
   // Terminal (pty)
   openTerminal: (taskId: string, worktreePath: string) => ipcRenderer.invoke('murl:openTerminal', taskId, worktreePath),
@@ -108,6 +115,7 @@ const murlApi: MurlApi = {
     ipcRenderer.invoke('murl:startPreview', taskId, worktreePath, command),
   stopPreview: (taskId: string) => ipcRenderer.invoke('murl:stopPreview', taskId),
   openPreviewUrl: (url: string) => ipcRenderer.invoke('murl:openPreviewUrl', url),
+  openUrl: (url: string) => ipcRenderer.invoke('murl:openUrl', url),
 
   // Preview push events
   onPreviewLog:    (cb) => previewLogBridge.on(cb as AnyFn),

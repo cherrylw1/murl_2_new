@@ -12,9 +12,15 @@ import * as crypto from 'crypto';
 import * as path from 'path';
 import * as fs from 'fs';
 import type { WebContents } from 'electron';
+import { exec } from 'child_process';
 import { WorktreeManager, OpenCodeAdapter, TaskStore } from '@murl/core';
-import type { MurlEvent, PersistedTask, TaskRecord } from '@murl/core';
+import type { MurlEvent, PersistedTask, TaskRecord, Recipe } from '@murl/core';
 import { loadSettings } from './settings.js';
+
+export let execHook = exec;
+export function setExecHook(newExec: typeof exec) {
+  execHook = newExec;
+}
 
 interface ActiveTask {
   abortController: AbortController;
@@ -29,6 +35,8 @@ interface QueuedTask {
   repoPath: string;
   prompt: string;
   model: string;
+  provider: string;
+  budgetCap: number;
   webContents: WebContents;
   baseBranch?: string;
 }
@@ -53,6 +61,8 @@ export class TaskRunner {
     repoPath: string,
     prompt: string,
     model: string,
+    provider: string,
+    budgetCap: number,
     webContents: WebContents,
     baseBranch?: string
   ): Promise<string> {
@@ -79,8 +89,9 @@ export class TaskRunner {
       repoPath,
       prompt,
       model,
-      provider: 'together',
+      provider: provider || 'together',
       status: 'queued',
+      budgetCap,
     });
 
     // Notify renderer that it is queued immediately
@@ -99,6 +110,8 @@ export class TaskRunner {
       repoPath,
       prompt,
       model,
+      provider: provider || 'together',
+      budgetCap,
       webContents,
       baseBranch,
     });
@@ -160,7 +173,7 @@ export class TaskRunner {
   }
 
   private async _startTask(task: QueuedTask): Promise<void> {
-    const { taskId, repoPath, prompt, model, webContents, baseBranch } = task;
+    const { taskId, repoPath, prompt, model, provider, webContents, baseBranch } = task;
     const settings = loadSettings();
     const worktreeRoot = settings.worktreeRoot;
     if (!worktreeRoot) {
@@ -181,7 +194,9 @@ export class TaskRunner {
 
     try {
       const binPath = settings.openCodePathOverride || undefined;
-      const adapter = new OpenCodeAdapter(binPath ? { binPath } : undefined);
+      // Allocate a dynamic random port in safe unprivileged range
+      const port = Math.floor(Math.random() * 10000) + 10000;
+      const adapter = new OpenCodeAdapter({ binPath, port });
 
       // Create real git worktree
       const worktree = await worktreeManager.create(taskId, baseBranch);
@@ -212,6 +227,8 @@ export class TaskRunner {
         worktree.path,
         prompt,
         model,
+        provider,
+        task.budgetCap,
         adapter,
         worktreeManager,
         abortController,
@@ -326,9 +343,8 @@ export class TaskRunner {
 
     // Git commands execution helpers
     const execInRepo = async (cmd: string) => {
-      const { exec } = await import('child_process');
       const { promisify } = await import('util');
-      const execAsync = promisify(exec);
+      const execAsync = promisify(execHook);
       return execAsync(cmd, { cwd: baseRepoPath });
     };
 
@@ -421,6 +437,111 @@ export class TaskRunner {
   }
 
   /**
+   * Opens a GitHub PR for a completed, undecided task.
+   *
+   * This is a mutually exclusive ALTERNATIVE to Keep/Discard — NOT something that
+   * happens after Keep. See docs/pr-design-decision.md for the full rationale.
+   *
+   * Flow:
+   * 1. Verify gh CLI is authenticated (gh auth status).
+   * 2. Push the task's branch to origin: `git push -u origin <branch>`.
+   * 3. Create the PR via `gh pr create`.
+   * 4. Store the real PR URL and set outcome = 'pr-opened'.
+   * 5. Do NOT touch the worktree — it stays alive for follow-ups.
+   */
+  async openPr(taskId: string): Promise<{ success: boolean; prUrl?: string; message?: string }> {
+    const record = this.store.getTask(taskId);
+    if (!record) {
+      return { success: false, message: `Task ${taskId} not found.` };
+    }
+    if (record.task.status === 'running') {
+      return { success: false, message: 'Cannot open a PR while the task is still running.' };
+    }
+    if (record.task.outcome !== null) {
+      return {
+        success: false,
+        message: `Task already has outcome '${record.task.outcome}' — cannot open a PR.`,
+      };
+    }
+    if (!fs.existsSync(record.task.worktreePath)) {
+      return {
+        success: false,
+        message: `Worktree no longer exists at ${record.task.worktreePath}.`,
+      };
+    }
+
+    const { promisify } = await import('util');
+    const execAsync = promisify(execHook);
+
+    const worktreePath = record.task.worktreePath;
+    const branch = record.task.branch;
+    const baseBranch = record.task.baseBranch || 'main';
+    const prompt = record.task.prompt;
+
+    // Helper: run a command in the worktree directory
+    const execIn = (cmd: string) => execAsync(cmd, { cwd: worktreePath });
+
+    // 1. Check gh authentication
+    try {
+      await execIn('gh auth status');
+    } catch (authErr: any) {
+      // gh auth status exits non-zero when not authenticated
+      const msg = (authErr.stderr || authErr.stdout || authErr.message || '').trim();
+      return {
+        success: false,
+        message:
+          `GitHub CLI is not authenticated. Run \`gh auth login\` in your terminal first.\n\n` +
+          `gh said: ${msg}`,
+      };
+    }
+
+    // 2. Push the branch to origin
+    try {
+      await execIn(`git push -u origin "${branch}"`);
+    } catch (pushErr: any) {
+      const msg = (pushErr.stderr || pushErr.stdout || pushErr.message || '').trim();
+      return {
+        success: false,
+        message: `Failed to push branch '${branch}' to origin:\n\n${msg}`,
+      };
+    }
+
+    // 3. Build a sensible PR title and body from the task prompt
+    const title = prompt.length > 72
+      ? prompt.slice(0, 69).trimEnd() + '…'
+      : prompt;
+    const body =
+      `Generated by [Murl](https://github.com/cherrylw1/murl_2_new) — AI-assisted coding agent.\n\n` +
+      `**Task prompt:**\n${prompt}`;
+
+    // 4. Create the PR via gh CLI
+    let prUrl: string;
+    try {
+      const { stdout } = await execIn(
+        `gh pr create --title "${title.replace(/"/g, '\\"')}" --body "${body.replace(/"/g, '\\"').replace(/\n/g, '\\n')}" --base "${baseBranch}" --head "${branch}"`
+      );
+      // gh pr create outputs the PR URL as the last line
+      prUrl = stdout.trim().split('\n').filter(Boolean).pop() || '';
+      if (!prUrl.startsWith('https://')) {
+        throw new Error(`Unexpected gh output (expected PR URL, got): ${stdout.trim()}`);
+      }
+    } catch (prErr: any) {
+      const msg = (prErr.stderr || prErr.stdout || prErr.message || '').trim();
+      return {
+        success: false,
+        message: `Failed to create PR:\n\n${msg}`,
+      };
+    }
+
+    // 5. Persist outcome — do NOT remove worktree
+    this.store.setOutcome(taskId, 'pr-opened');
+    this.store.setPrUrl(taskId, prUrl);
+
+    return { success: true, prUrl };
+  }
+
+
+  /**
    * Sends a follow-up prompt to an existing completed task's worktree.
    * The task must be completed, have no outcome yet, and its worktree must exist on disk.
    * Runs a fresh OpenCode session against the same worktree (Option B — pragmatic re-prompt).
@@ -445,11 +566,13 @@ export class TaskRunner {
       throw new Error(`Cannot follow up: worktree no longer exists at ${record.task.worktreePath}.`);
     }
 
-    const { worktreePath, model } = record.task;
+    const { worktreePath, model, provider } = record.task;
     const abortController = new AbortController();
     const settings = loadSettings();
     const binPath = settings.openCodePathOverride || undefined;
-    const adapter = new OpenCodeAdapter(binPath ? { binPath } : undefined);
+    // Allocate a dynamic random port in safe unprivileged range
+    const port = Math.floor(Math.random() * 10000) + 10000;
+    const adapter = new OpenCodeAdapter({ binPath, port });
 
     // Register in activeTasks so cancel() can abort the follow-up
     const activeEntry: ActiveTask = {
@@ -485,15 +608,45 @@ export class TaskRunner {
 
       // 3. Execute the follow-up run
       const collectedEvents: MurlEvent[] = [];
+      const budgetCap = record.task.budgetCap || 0;
       const onEvent = (event: MurlEvent) => {
         collectedEvents.push(event);
         push('murl:task-event', { taskId, event });
+
+        if (event.type === 'cost') {
+          const { tokensIn, tokensOut, costUsd } = event;
+          this.store.saveCost(taskId, { tokensIn, tokensOut, costUsd });
+          const settings = loadSettings();
+          if (costUsd > budgetCap && settings.budgetGuardAction === 'halt') {
+            const entry = this.activeTasks.get(taskId);
+            if (entry) {
+              entry.wasCancelled = true;
+            }
+            abortController.abort();
+          }
+        }
       };
+
+      const providerConfig = settings.providers?.find(p => p.id === provider) || {
+        id: 'together',
+        name: 'Together',
+        baseURL: 'https://api.together.xyz/v1'
+      };
+      const { loadProviderKeys } = await import('./settings.js');
+      const keys = loadProviderKeys();
+      const apiKeyVal = keys[providerConfig.id] || '';
 
       const { diff } = await adapter.runTask(
         worktreePath,
         prompt,
-        { model },
+        {
+          model,
+          providerId: providerConfig.id,
+          providerName: providerConfig.name,
+          providerBaseURL: providerConfig.baseURL,
+          apiKeyEnvVarName: `MURL_API_KEY_${taskId}`,
+          apiKeyVal
+        },
         onEvent,
         abortController.signal
       );
@@ -525,9 +678,8 @@ export class TaskRunner {
   }
 
   private async getBaseRepoPath(worktreePath: string): Promise<string> {
-    const { exec } = await import('child_process');
     const { promisify } = await import('util');
-    const execAsync = promisify(exec);
+    const execAsync = promisify(execHook);
     try {
       const { stdout } = await execAsync('git rev-parse --git-common-dir', { cwd: worktreePath });
       const gitCommonDir = path.resolve(worktreePath, stdout.trim());
@@ -543,6 +695,8 @@ export class TaskRunner {
     worktreePath: string,
     prompt: string,
     model: string,
+    providerId: string,
+    budgetCap: number,
     adapter: OpenCodeAdapter,
     worktreeManager: WorktreeManager,
     abortController: AbortController,
@@ -565,13 +719,44 @@ export class TaskRunner {
     const onEvent = (event: MurlEvent) => {
       collectedEvents.push(event);
       push('murl:task-event', { taskId, event });
+
+      if (event.type === 'cost') {
+        const { tokensIn, tokensOut, costUsd } = event;
+        this.store.saveCost(taskId, { tokensIn, tokensOut, costUsd });
+        const settings = loadSettings();
+        if (costUsd > budgetCap && settings.budgetGuardAction === 'halt') {
+          const entry = this.activeTasks.get(taskId);
+          if (entry) {
+            entry.wasCancelled = true;
+          }
+          abortController.abort();
+        }
+      }
     };
 
     try {
+      const settings = loadSettings();
+      const providerConfig = settings.providers?.find(p => p.id === providerId) || {
+        id: 'together',
+        name: 'Together',
+        baseURL: 'https://api.together.xyz/v1'
+      };
+      
+      const { loadProviderKeys } = await import('./settings.js');
+      const keys = loadProviderKeys();
+      const apiKeyVal = keys[providerConfig.id] || '';
+
       const { diff } = await adapter.runTask(
         worktreePath,
         prompt,
-        { model },
+        {
+          model,
+          providerId: providerConfig.id,
+          providerName: providerConfig.name,
+          providerBaseURL: providerConfig.baseURL,
+          apiKeyEnvVarName: `MURL_API_KEY_${taskId}`,
+          apiKeyVal
+        },
         onEvent,
         abortController.signal
       );
@@ -627,5 +812,17 @@ export class TaskRunner {
         console.error('[TaskRunner] Error processing queue after task execution:', qErr);
       });
     }
+  }
+
+  createRecipe(recipe: Omit<Recipe, 'id'>): Recipe {
+    return this.store.createRecipe(recipe);
+  }
+
+  listRecipes(): Recipe[] {
+    return this.store.listRecipes();
+  }
+
+  deleteRecipe(id: string): void {
+    this.store.deleteRecipe(id);
   }
 }

@@ -32,7 +32,14 @@ export interface MurlActionEvent {
   status: 'pending' | 'running' | 'completed' | 'failed';
 }
 
-export type MurlEvent = MurlStatusEvent | MurlMessageEvent | MurlActionEvent;
+export interface MurlCostEvent {
+  type: 'cost';
+  tokensIn: number;
+  tokensOut: number;
+  costUsd: number;
+}
+
+export type MurlEvent = MurlStatusEvent | MurlMessageEvent | MurlActionEvent | MurlCostEvent;
 
 export class OpenCodeAdapter {
   private serverProcess: ChildProcess | null = null;
@@ -64,10 +71,7 @@ export class OpenCodeAdapter {
     return this.serverProcess !== null;
   }
 
-  /**
-   * Starts the persistent opencode serve process if it is not already running.
-   */
-  async startServer(cwd?: string): Promise<void> {
+  async startServer(cwd?: string, extraEnv?: Record<string, string>): Promise<void> {
     if (this.serverProcess) {
       return;
     }
@@ -80,7 +84,7 @@ export class OpenCodeAdapter {
 
     this.serverProcess = spawn(this.binPath, ['serve', '--port', String(this.port), '--hostname', '127.0.0.1'], {
       cwd: cwd ? path.resolve(cwd) : undefined,
-      env: { ...process.env },
+      env: { ...process.env, ...extraEnv },
       stdio: 'pipe',
     });
 
@@ -115,7 +119,11 @@ export class OpenCodeAdapter {
     worktreePath: string,
     prompt: string,
     modelConfig?: {
-      provider?: string;
+      providerId?: string;
+      providerName?: string;
+      providerBaseURL?: string;
+      apiKeyEnvVarName?: string;
+      apiKeyVal?: string;
       model?: string;
       timeoutMs?: number;
     },
@@ -125,7 +133,21 @@ export class OpenCodeAdapter {
     events: MurlEvent[];
     diff: string;
   }> {
-    await this.startServer(worktreePath);
+    const providerId = modelConfig?.providerId || 'together';
+    const providerName = modelConfig?.providerName || 'Together';
+    const providerBaseURL = modelConfig?.providerBaseURL || 'https://api.together.xyz/v1';
+    const apiKeyEnvVarName = modelConfig?.apiKeyEnvVarName || 'TOGETHER_API_KEY';
+    const apiKeyVal = modelConfig?.apiKeyVal;
+
+    const extraEnv: Record<string, string> = {};
+    if (apiKeyEnvVarName && apiKeyVal) {
+      extraEnv[apiKeyEnvVarName] = apiKeyVal;
+    } else if (apiKeyEnvVarName && process.env[apiKeyEnvVarName]) {
+      // Fallback for testing/compatibility
+      extraEnv[apiKeyEnvVarName] = process.env[apiKeyEnvVarName]!;
+    }
+
+    await this.startServer(worktreePath, extraEnv);
     if (!this.client) {
       throw new Error('OpenCode client is not initialized.');
     }
@@ -139,19 +161,19 @@ export class OpenCodeAdapter {
     const opencodeConfig = {
       $schema: 'https://opencode.ai/config.json',
       provider: {
-        together: {
+        [providerId]: {
           npm: '@ai-sdk/openai-compatible',
-          name: 'Together',
+          name: providerName,
           options: {
-            baseURL: 'https://api.together.xyz/v1',
-            apiKey: '{env:TOGETHER_API_KEY}',
+            baseURL: providerBaseURL,
+            apiKey: `{env:${apiKeyEnvVarName}}`,
           },
           models: {
             [model]: { name: model.split('/').pop() || 'Model' },
           },
         },
       },
-      model: `together/${model}`,
+      model: `${providerId}/${model}`,
     };
     fs.writeFileSync(opencodeJsonPath, JSON.stringify(opencodeConfig, null, 2));
 
@@ -215,6 +237,9 @@ export class OpenCodeAdapter {
     }
 
     // 4. Consume the stream asynchronously in the background
+    const messageTokens: Record<string, { input: number; output: number }> = {};
+    const defaultModel = modelConfig?.model || 'meta-llama/Llama-3.3-70B-Instruct-Turbo';
+
     const consumePromise = (async () => {
       try {
         for await (const ev of sseResult.stream as any) {
@@ -229,6 +254,34 @@ export class OpenCodeAdapter {
               ? ev.properties.error
               : JSON.stringify(ev.properties.error);
             break;
+          } else if (ev.type === 'message.updated' && ev.properties?.info?.sessionID === sessionId) {
+            const info = ev.properties.info;
+            if (info.role === 'assistant' && info.tokens) {
+              const msgId = info.id;
+              if (msgId) {
+                messageTokens[msgId] = {
+                  input: info.tokens.input || 0,
+                  output: info.tokens.output || 0,
+                };
+
+                let totalInput = 0;
+                let totalOutput = 0;
+                for (const t of Object.values(messageTokens)) {
+                  totalInput += t.input;
+                  totalOutput += t.output;
+                }
+
+                const resolvedModel = info.modelID || defaultModel;
+                const costVal = calculateCost(resolvedModel, totalInput, totalOutput);
+
+                emit({
+                  type: 'cost',
+                  tokensIn: totalInput,
+                  tokensOut: totalOutput,
+                  costUsd: costVal,
+                });
+              }
+            }
           } else if (ev.type === 'message.part.updated' && ev.properties?.part?.sessionID === sessionId) {
             const part = ev.properties.part;
             const delta = ev.properties.delta;
@@ -355,4 +408,37 @@ export class OpenCodeAdapter {
       diff,
     };
   }
+}
+
+export function calculateCost(model: string, inputTokens: number, outputTokens: number): number {
+  const cleanModel = model.replace(/^[^\/]+\//, '');
+
+  let inputRate = 1.0;  // per 1M tokens
+  let outputRate = 1.0; // per 1M tokens
+
+  if (cleanModel.includes('Llama-3.3-70B') || cleanModel.includes('Llama-3.3-70b')) {
+    inputRate = 0.60;
+    outputRate = 0.60;
+  } else if (cleanModel.includes('Llama-3.1-405B') || cleanModel.includes('Llama-3.1-405b')) {
+    inputRate = 2.66;
+    outputRate = 2.66;
+  } else if (cleanModel.includes('Qwen2.5-72B') || cleanModel.includes('Qwen2.5-72b')) {
+    inputRate = 0.40;
+    outputRate = 0.40;
+  } else if (cleanModel.includes('DeepSeek-V3') || cleanModel.includes('deepseek-v3')) {
+    inputRate = 0.14;
+    outputRate = 0.28;
+  } else if (cleanModel.includes('gpt-4o-mini')) {
+    inputRate = 0.15;
+    outputRate = 0.60;
+  } else if (cleanModel.includes('gpt-4o')) {
+    inputRate = 2.50;
+    outputRate = 10.00;
+  } else if (cleanModel.includes('gpt-3.5-turbo')) {
+    inputRate = 0.50;
+    outputRate = 1.50;
+  }
+
+  const cost = ((inputTokens / 1_000_000) * inputRate) + ((outputTokens / 1_000_000) * outputRate);
+  return Number(cost.toFixed(6));
 }

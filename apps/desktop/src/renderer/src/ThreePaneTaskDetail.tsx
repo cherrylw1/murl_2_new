@@ -168,7 +168,8 @@ export default function ThreePaneTaskDetail({
   const eventLogBottomRef = useRef<HTMLDivElement>(null);
   const [centerTab, setCenterTab] = useState<'diff' | 'terminal' | 'preview'>('diff');
 
-  const [outcome, setOutcome] = useState<'kept' | 'discarded' | null>((task.outcome as any) || null);
+  const [outcome, setOutcome] = useState<'kept' | 'discarded' | 'pr-opened' | null>((task.outcome as any) || null);
+  const [prUrl, setPrUrl] = useState<string | null>(task.prUrl || null);
   const [outcomeError, setOutcomeError] = useState<string | null>(null);
   const [isOutcomePending, setIsOutcomePending] = useState<boolean>(false);
 
@@ -222,6 +223,27 @@ export default function ThreePaneTaskDetail({
         setOutcome('discarded');
       } else {
         setOutcomeError(result.message || 'Failed to discard task.');
+      }
+    } catch (err: any) {
+      setOutcomeError(err.message || String(err));
+    } finally {
+      setIsOutcomePending(false);
+    }
+  };
+
+  const handleOpenPr = async () => {
+    if (!task.taskId) return;
+    setIsOutcomePending(true);
+    setOutcomeError(null);
+    try {
+      const result = await window.murl.openPrTask(task.taskId);
+      if (result.success) {
+        setOutcome('pr-opened');
+        if (result.prUrl) {
+          setPrUrl(result.prUrl);
+        }
+      } else {
+        setOutcomeError(result.message || 'Failed to open PR.');
       }
     } catch (err: any) {
       setOutcomeError(err.message || String(err));
@@ -308,7 +330,7 @@ export default function ThreePaneTaskDetail({
 
             {isOutcomePending && (
               <span className="text-label text-aluminium animate-breath">
-                Processing merge decision…
+                Processing decision…
               </span>
             )}
 
@@ -321,6 +343,12 @@ export default function ThreePaneTaskDetail({
                   Keep
                 </button>
                 <button
+                  onClick={handleOpenPr}
+                  className="px-4 py-1.5 rounded bg-carbon border border-aluminium/20 text-label text-chalk font-semibold hover:shadow-active transition-taste"
+                >
+                  Open PR
+                </button>
+                <button
                   onClick={handleDiscard}
                   className="px-4 py-1.5 rounded bg-transparent border border-aluminium/15 text-label text-aluminium hover:text-chalk hover:border-aluminium/30 transition-taste"
                 >
@@ -330,12 +358,22 @@ export default function ThreePaneTaskDetail({
             )}
 
             {outcome && (
-              <div className={`text-label text-[10px] px-2.5 py-1 rounded border font-mono select-none font-semibold ${
-                outcome === 'kept'
-                  ? 'border-aluminium/20 text-chalk bg-carbon/50 shadow-active animate-breath'
-                  : 'border-transparent text-aluminium/65 bg-carbon/25'
-              }`}>
-                {outcome === 'kept' ? 'kept & merged' : 'discarded'}
+              <div className="flex items-center gap-2">
+                <div className={`text-label text-[10px] px-2.5 py-1 rounded border font-mono select-none font-semibold ${
+                  outcome === 'kept' || outcome === 'pr-opened'
+                    ? 'border-aluminium/20 text-chalk bg-carbon/50 shadow-active animate-breath'
+                    : 'border-transparent text-aluminium/65 bg-carbon/25'
+                }`}>
+                  {outcome === 'kept' ? 'kept & merged' : outcome === 'pr-opened' ? 'pr opened' : 'discarded'}
+                </div>
+                {outcome === 'pr-opened' && prUrl && (
+                  <button
+                    onClick={() => window.murl.openUrl(prUrl)}
+                    className="px-3 py-1 rounded bg-carbon border border-signal/40 text-label text-signal font-semibold hover:bg-signal/10 transition-taste cursor-pointer"
+                  >
+                    View PR
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -360,7 +398,42 @@ export default function ThreePaneTaskDetail({
               <span className="font-mono text-aluminium/85">{new Date(task.createdAt).toLocaleString()}</span>
             </div>
           )}
+          {typeof task.costUsd === 'number' && (
+            <div>
+              <span className="text-label text-[10px] text-aluminium/40 mr-1.5">COST:</span>
+              <span className={`font-mono font-bold ${
+                task.budgetCap && task.costUsd > task.budgetCap ? 'text-signal' : 'text-aluminium/85'
+              }`}>
+                ${task.costUsd.toFixed(4)}
+              </span>
+              {task.budgetCap && (
+                <span className="text-aluminium/40 font-mono">
+                  {' '}/ ${task.budgetCap.toFixed(2)}
+                </span>
+              )}
+            </div>
+          )}
+          {typeof task.tokensIn === 'number' && typeof task.tokensOut === 'number' && (
+            <div>
+              <span className="text-label text-[10px] text-aluminium/40 mr-1.5">TOKENS:</span>
+              <span className="font-mono text-aluminium/85">
+                {task.tokensIn} in / {task.tokensOut} out
+              </span>
+            </div>
+          )}
         </div>
+
+        {typeof task.costUsd === 'number' && typeof task.budgetCap === 'number' && task.costUsd > task.budgetCap && (
+          <div className="bg-carbon/50 border border-signal/30 p-3.5 rounded flex items-start gap-3">
+            <div className="w-2.5 h-2.5 rounded-full bg-signal shadow-signal animate-pulse-signal mt-1 flex-shrink-0" />
+            <div className="flex flex-col gap-0.5">
+              <span className="text-label text-signal tracking-wider font-semibold">BUDGET EXCEEDED</span>
+              <span className="text-data text-signal/80 text-xs break-words">
+                This task has accumulated a cost of ${task.costUsd.toFixed(4)}, which exceeds its budget cap of ${task.budgetCap.toFixed(2)}.
+              </span>
+            </div>
+          </div>
+        )}
 
         {runState === 'failed' && errorMessage && (
           <div className="bg-carbon/50 border border-signal/30 p-3.5 rounded flex items-start gap-3">

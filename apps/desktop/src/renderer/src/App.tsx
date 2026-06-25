@@ -9,6 +9,8 @@ import {
   TaskEventPayload,
   TaskFailedPayload,
   TaskRecord,
+  ProviderConfig,
+  Recipe,
 } from '../../preload/types.js';
 import ThreePaneTaskDetail from './ThreePaneTaskDetail.js';
 import GlyphWall from './GlyphWall.js';
@@ -53,6 +55,11 @@ export default function App(): React.JSX.Element {
   const [taskDescription, setTaskDescription] = useState<string>('');
   const [taskBranch, setTaskBranch] = useState<string>('');
   const [taskModel, setTaskModel] = useState<string>('');
+  const [taskBudgetCap, setTaskBudgetCap] = useState<string>('10.0');
+  const [recipes, setRecipes] = useState<Recipe[]>([]);
+  const [showSaveRecipeModal, setShowSaveRecipeModal] = useState(false);
+  const [recipeNameInput, setRecipeNameInput] = useState('');
+  const [recipeDescInput, setRecipeDescInput] = useState('');
   const [launcherError, setLauncherError] = useState<string | null>(null);
   const [isLaunching, setIsLaunching] = useState<boolean>(false);
 
@@ -73,18 +80,21 @@ export default function App(): React.JSX.Element {
   const [selectedTaskRecord, setSelectedTaskRecord] = useState<TaskRecord | null>(null);
 
   // Settings
-  const [apiKeyConfigured, setApiKeyConfigured] = useState<boolean>(false);
-  const [apiKeyInput, setApiKeyInput] = useState<string>('');
+  const [configuredProviders, setConfiguredProviders] = useState<Record<string, boolean>>({});
+  const [apiKeyInputs, setApiKeyInputs] = useState<Record<string, string>>({});
   const [provider, setProvider] = useState<string>('together');
+  const [taskProvider, setTaskProvider] = useState<string>('together');
   const [model, setModel] = useState<string>('meta-llama/Llama-3.3-70B-Instruct-Turbo');
   const [defaultRepoPath, setDefaultRepoPath] = useState<string>('');
   const [worktreeRoot, setWorktreeRoot] = useState<string>('');
   const [concurrencyCap, setConcurrencyCap] = useState<number>(3);
   const [openCodePathOverride, setOpenCodePathOverride] = useState<string>('');
   const [perTaskBudgetDefault, setPerTaskBudgetDefault] = useState<number>(10.0);
+  const [budgetGuardAction, setBudgetGuardAction] = useState<'warn' | 'halt'>('warn');
+  const [providers, setProviders] = useState<ProviderConfig[]>([]);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
-  const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
-  const [testMessage, setTestMessage] = useState<string>('');
+  const [testStatuses, setTestStatuses] = useState<Record<string, 'idle' | 'testing' | 'success' | 'error'>>({});
+  const [testMessages, setTestMessages] = useState<Record<string, string>>({});
 
   // Ref for current inspecting task id — avoids stale closure in event handlers
   const inspectingTaskIdRef = useRef<string | null>(null);
@@ -94,17 +104,21 @@ export default function App(): React.JSX.Element {
 
   const fetchSettings = useCallback(() => {
     window.murl.getSettingsStatus()
-      .then(({ apiKeyConfigured, settings }) => {
-        setApiKeyConfigured(apiKeyConfigured);
+      .then(({ configuredProviders, settings }) => {
+        setConfiguredProviders(configuredProviders);
         setProvider(settings.provider);
+        setTaskProvider(settings.provider);
         setModel(settings.model);
         setDefaultRepoPath(settings.defaultRepoPath);
         setWorktreeRoot(settings.worktreeRoot);
         setConcurrencyCap(settings.concurrencyCap);
         setOpenCodePathOverride(settings.openCodePathOverride);
         setPerTaskBudgetDefault(settings.perTaskBudgetDefault);
+        setTaskBudgetCap(String(settings.perTaskBudgetDefault));
+        setBudgetGuardAction(settings.budgetGuardAction || 'warn');
         setRecentRepos(settings.recentRepos || []);
         setTaskModel(settings.model);
+        setProviders(settings.providers || []);
       })
       .catch((err) => setError(err.message || String(err)));
   }, []);
@@ -115,6 +129,12 @@ export default function App(): React.JSX.Element {
       .catch((err) => console.error('Failed to load task history:', err));
   }, []);
 
+  const fetchRecipes = useCallback(() => {
+    window.murl.listRecipes()
+      .then(setRecipes)
+      .catch((err) => console.error('Failed to load recipes:', err));
+  }, []);
+
   // ─── Boot ───────────────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -123,7 +143,8 @@ export default function App(): React.JSX.Element {
       .catch((err) => setError(err.message || String(err)));
     fetchSettings();
     fetchTaskHistory();
-  }, [fetchSettings, fetchTaskHistory]);
+    fetchRecipes();
+  }, [fetchSettings, fetchTaskHistory, fetchRecipes]);
 
   // ─── Ticking elapsed timer (1 s resolution) ─────────────────────────────────
 
@@ -191,19 +212,25 @@ export default function App(): React.JSX.Element {
   const handleSave = async () => {
     setSaveStatus('saving');
     try {
-      if (apiKeyInput.trim()) {
-        await window.murl.saveApiKey(provider, apiKeyInput.trim());
-        setApiKeyConfigured(true);
-        setApiKeyInput('');
+      // Save all non-empty API keys for configured providers
+      for (const [pId, key] of Object.entries(apiKeyInputs)) {
+        if (key.trim()) {
+          await window.murl.saveApiKey(pId, key.trim());
+        }
       }
+      setApiKeyInputs({});
+
       await window.murl.saveHarnessSettings({
         provider, model, defaultRepoPath, worktreeRoot,
         concurrencyCap: Number(concurrencyCap),
         openCodePathOverride,
         perTaskBudgetDefault: Number(perTaskBudgetDefault),
         recentRepos,
+        providers,
+        budgetGuardAction,
       } as HarnessSettings);
       setSaveStatus('success');
+      fetchSettings();
       setTimeout(() => setSaveStatus('idle'), 3000);
     } catch (err: unknown) {
       setSaveStatus('error');
@@ -212,16 +239,34 @@ export default function App(): React.JSX.Element {
     }
   };
 
-  const handleTestConnection = async () => {
-    setTestStatus('testing');
-    setTestMessage('');
+  const handleTestConnection = async (providerId: string) => {
+    setTestStatuses(prev => ({ ...prev, [providerId]: 'testing' }));
+    setTestMessages(prev => ({ ...prev, [providerId]: '' }));
     try {
-      const result = await window.murl.testConnection(provider, model);
-      setTestStatus(result.success ? 'success' : 'error');
-      setTestMessage(result.message);
+      const typedKey = apiKeyInputs[providerId];
+      if (typedKey && typedKey.trim()) {
+        await window.murl.saveApiKey(providerId, typedKey.trim());
+        setConfiguredProviders(prev => ({ ...prev, [providerId]: true }));
+        setApiKeyInputs(prev => {
+          const next = { ...prev };
+          delete next[providerId];
+          return next;
+        });
+      }
+
+      // Find connection test model from settings/defaults
+      const testModel = providerId === 'together'
+        ? 'meta-llama/Llama-3.3-70B-Instruct-Turbo'
+        : providerId === 'openai'
+          ? 'gpt-4o-mini'
+          : 'gpt-4o-mini'; // fallback for custom providers
+
+      const result = await window.murl.testConnection(providerId, testModel);
+      setTestStatuses(prev => ({ ...prev, [providerId]: result.success ? 'success' : 'error' }));
+      setTestMessages(prev => ({ ...prev, [providerId]: result.message }));
     } catch (err: unknown) {
-      setTestStatus('error');
-      setTestMessage((err as Error).message || String(err));
+      setTestStatuses(prev => ({ ...prev, [providerId]: 'error' }));
+      setTestMessages(prev => ({ ...prev, [providerId]: (err as Error).message || String(err) }));
     }
   };
 
@@ -267,9 +312,14 @@ export default function App(): React.JSX.Element {
       setLauncherError('Please enter a description of the task.');
       return;
     }
+    const cap = parseFloat(taskBudgetCap);
+    if (isNaN(cap) || cap <= 0) {
+      setLauncherError('Please enter a valid positive budget cap.');
+      return;
+    }
     setIsLaunching(true);
     try {
-      await window.murl.launchTask(activeRepo.path, taskDescription, taskModel, taskBranch);
+      await window.murl.launchTask(activeRepo.path, taskDescription, taskModel, taskProvider, cap, taskBranch);
       // Clear the prompt after a successful launch so the form is ready for the next task
       setTaskDescription('');
       fetchTaskHistory();
@@ -277,6 +327,88 @@ export default function App(): React.JSX.Element {
       setLauncherError((err as Error).message || String(err));
     } finally {
       setIsLaunching(false);
+    }
+  };
+
+  const handleSaveRecipe = async () => {
+    if (!activeRepo) return;
+    if (!recipeNameInput.trim()) {
+      alert('Please enter a recipe name.');
+      return;
+    }
+    try {
+      const budget = taskBudgetCap ? parseFloat(taskBudgetCap) : null;
+      await window.murl.createRecipe({
+        name: recipeNameInput.trim(),
+        description: recipeDescInput.trim() || null,
+        repoPath: activeRepo.path,
+        prompt: taskDescription,
+        model: taskModel,
+        provider: taskProvider,
+        baseBranch: taskBranch || null,
+        budgetCap: isNaN(budget as any) || budget === null ? null : budget,
+      });
+      setShowSaveRecipeModal(false);
+      setRecipeNameInput('');
+      setRecipeDescInput('');
+      fetchRecipes();
+    } catch (err: any) {
+      console.error('Failed to save recipe:', err);
+    }
+  };
+
+  const handleOneClickRunRecipe = async (recipe: Recipe) => {
+    try {
+      const res = await window.murl.validateRepo(recipe.repoPath);
+      if (!res.valid) {
+        alert(`The repository path "${recipe.repoPath}" is not valid or no longer exists.`);
+        return;
+      }
+      
+      let baseBranch = recipe.baseBranch;
+      if (!baseBranch) {
+        try {
+          baseBranch = await window.murl.getRepoBranch(recipe.repoPath);
+        } catch {
+          baseBranch = 'main';
+        }
+      }
+
+      const cap = recipe.budgetCap !== null && recipe.budgetCap !== undefined
+        ? recipe.budgetCap
+        : perTaskBudgetDefault;
+
+      await window.murl.launchTask(recipe.repoPath, recipe.prompt, recipe.model, recipe.provider, cap, baseBranch || 'main');
+      
+      fetchTaskHistory();
+      setActiveTab('tasks');
+    } catch (err: any) {
+      alert(`Failed to run recipe: ${err.message || String(err)}`);
+    }
+  };
+
+  const handleLoadRecipe = (recipe: Recipe) => {
+    const foundRepo = recentRepos.find((r) => r.path === recipe.repoPath) || {
+      path: recipe.repoPath,
+      displayName: recipe.repoPath.split(/[/\\]/).pop() || 'Repo'
+    };
+    setActiveRepo(foundRepo);
+    setTaskDescription(recipe.prompt);
+    setTaskModel(recipe.model);
+    setTaskProvider(recipe.provider);
+    setTaskBranch(recipe.baseBranch || '');
+    setTaskBudgetCap(recipe.budgetCap !== null && recipe.budgetCap !== undefined ? String(recipe.budgetCap) : String(perTaskBudgetDefault));
+    setActiveTab('tasks');
+  };
+
+  const handleDeleteRecipe = async (id: string) => {
+    if (confirm('Are you sure you want to delete this recipe?')) {
+      try {
+        await window.murl.deleteRecipe(id);
+        fetchRecipes();
+      } catch (err: any) {
+        console.error('Failed to delete recipe:', err);
+      }
     }
   };
 
@@ -445,12 +577,12 @@ export default function App(): React.JSX.Element {
                     runState={inspectingRunState}
                     errorMessage={inspectingError || undefined}
                     worktreePath={
-                      inspectingRecord.task.outcome === null
+                      inspectingRecord.task.outcome !== 'kept' && inspectingRecord.task.outcome !== 'discarded'
                         ? inspectingRecord.task.worktreePath
                         : undefined
                     }
                     onFollowUp={
-                      inspectingRunState === 'completed' && inspectingRecord.task.outcome === null
+                      inspectingRunState === 'completed' && inspectingRecord.task.outcome !== 'kept' && inspectingRecord.task.outcome !== 'discarded'
                         ? async (prompt) => {
                             await window.murl.followUpTask(inspectingRecord.task.taskId, prompt);
                           }
@@ -537,6 +669,31 @@ export default function App(): React.JSX.Element {
                     />
                   </div>
 
+                  {/* Provider */}
+                  <div className="flex flex-col gap-2">
+                    <label className="text-label text-aluminium">Provider</label>
+                    <select
+                      id="launcher-provider"
+                      value={taskProvider}
+                      onChange={(e) => {
+                        const nextP = e.target.value;
+                        setTaskProvider(nextP);
+                        if (nextP === 'together') {
+                          setTaskModel('meta-llama/Llama-3.3-70B-Instruct-Turbo');
+                        } else if (nextP === 'openai') {
+                          setTaskModel('gpt-4o-mini');
+                        }
+                      }}
+                      className="bg-well border border-aluminium/20 rounded p-2.5 text-data text-chalk focus:border-chalk outline-none cursor-pointer"
+                    >
+                      {providers.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
                   {/* Model override */}
                   <div className="flex flex-col gap-2">
                     <label className="text-label text-aluminium">Model</label>
@@ -549,11 +706,36 @@ export default function App(): React.JSX.Element {
                       className="bg-well border border-aluminium/20 rounded p-2.5 text-data text-chalk focus:border-chalk outline-none"
                     />
                     <datalist id="together-models-launcher">
-                      <option value="meta-llama/Llama-3.3-70B-Instruct-Turbo" />
-                      <option value="meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo" />
-                      <option value="Qwen/Qwen2.5-72B-Instruct-Turbo" />
-                      <option value="deepseek-ai/DeepSeek-V3" />
+                      {taskProvider === 'openai' ? (
+                        <>
+                          <option value="gpt-4o" />
+                          <option value="gpt-4o-mini" />
+                          <option value="gpt-3.5-turbo" />
+                        </>
+                      ) : (
+                        <>
+                          <option value="meta-llama/Llama-3.3-70B-Instruct-Turbo" />
+                          <option value="meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo" />
+                          <option value="Qwen/Qwen2.5-72B-Instruct-Turbo" />
+                          <option value="deepseek-ai/DeepSeek-V3" />
+                        </>
+                      )}
                     </datalist>
+                  </div>
+
+                  {/* Budget Cap ($) */}
+                  <div className="flex flex-col gap-2">
+                    <label className="text-label text-aluminium">Budget Cap ($)</label>
+                    <input
+                      id="launcher-budget-cap"
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      value={taskBudgetCap}
+                      onChange={(e) => setTaskBudgetCap(e.target.value)}
+                      placeholder="10.00"
+                      className="bg-well border border-aluminium/20 rounded p-2.5 text-data text-chalk focus:border-chalk outline-none"
+                    />
                   </div>
 
                   {/* Launch button */}
@@ -561,9 +743,22 @@ export default function App(): React.JSX.Element {
                     id="launch-task-btn"
                     onClick={handleLaunchTask}
                     disabled={isLaunching || !activeRepo || !taskDescription.trim()}
-                    className="w-full px-4 py-3 rounded bg-carbon border border-aluminium/20 text-body text-chalk font-semibold hover:shadow-active disabled:opacity-40 disabled:cursor-not-allowed transition-taste"
+                    className="w-full px-4 py-3 rounded bg-carbon border border-aluminium/20 text-body text-chalk font-semibold hover:shadow-active disabled:opacity-40 disabled:cursor-not-allowed transition-taste mb-2"
                   >
                     {isLaunching ? 'Launching…' : 'Launch Task'}
+                  </button>
+
+                  <button
+                    id="save-recipe-btn"
+                    onClick={() => {
+                      if (activeRepo && taskDescription.trim()) {
+                        setShowSaveRecipeModal(true);
+                      }
+                    }}
+                    disabled={!activeRepo || !taskDescription.trim()}
+                    className="w-full px-4 py-2.5 rounded bg-transparent border border-aluminium/15 text-label text-aluminium hover:text-chalk hover:border-aluminium/30 disabled:opacity-40 disabled:cursor-not-allowed transition-taste"
+                  >
+                    Save as Recipe
                   </button>
                 </div>
 
@@ -601,35 +796,98 @@ export default function App(): React.JSX.Element {
               )
             )}
 
-            {/* ── RECIPES TAB ─────────────────────────────────────────────── */}
             {activeTab === 'recipes' && (
-              <div className="flex-1 flex flex-col justify-between p-8">
+              <div className="flex-1 flex flex-col p-8 overflow-y-auto min-h-0">
                 <div>
-                  <div className="text-label text-aluminium mb-1">CURRENT AREA</div>
-                  <h2 className="text-title text-chalk mb-6">Available Recipes</h2>
-                  <div className="flex flex-col gap-3">
-                    {[
-                      { name: 'Git Refactor', desc: 'Refactor imports, rename variables, or clean styling.' },
-                      { name: 'Test Suite Generator', desc: 'Generate comprehensive tests for source files.' },
-                      { name: 'Documentation Writer', desc: 'Scan source files and write README or documentation pages.' },
-                    ].map((recipe) => (
-                      <div key={recipe.name} className="flex justify-between items-center p-4 bg-carbon/40 rounded border border-aluminium/10">
+                  <div className="text-label text-aluminium mb-1">LIBRARY</div>
+                  <h2 className="text-title text-chalk mb-6">Saved Recipes</h2>
+                </div>
+
+                {recipes.length === 0 ? (
+                  <div className="flex-1 flex flex-col items-center justify-center min-h-[300px]">
+                    <div className="text-center max-w-sm">
+                      <p className="text-data text-aluminium/60 text-sm leading-relaxed mb-4">
+                        No recipes saved yet. Compose a task in the launcher pane on the left, then click &quot;Save as Recipe&quot; to save it here for easy re-running.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {recipes.map((recipe) => (
+                      <div key={recipe.id} className="bg-carbon/40 border border-aluminium/10 rounded-lg p-5 flex flex-col justify-between gap-4 transition-taste hover:border-aluminium/20 hover:shadow-active">
                         <div>
-                          <div className="text-body font-semibold text-chalk">{recipe.name}</div>
-                          <div className="text-data text-aluminium text-xs mt-1">{recipe.desc}</div>
+                          <div className="flex items-start justify-between gap-4">
+                            <div>
+                              <h3 className="text-body font-semibold text-chalk text-sm">{recipe.name}</h3>
+                              {recipe.description && (
+                                <p className="text-data text-aluminium/70 text-xs mt-1 leading-relaxed">
+                                  {recipe.description}
+                                </p>
+                              )}
+                            </div>
+                            <button
+                              onClick={() => handleDeleteRecipe(recipe.id)}
+                              className="text-aluminium/40 hover:text-signal transition-taste text-xs p-1 font-mono"
+                              title="Delete Recipe"
+                            >
+                              DELETE
+                            </button>
+                          </div>
+
+                          <div className="flex flex-col gap-2 mt-4 border-t border-aluminium/5 pt-3">
+                            <div className="flex items-center text-[10px] font-mono">
+                              <span className="text-aluminium/45 w-16 uppercase">Repo:</span>
+                              <span className="text-aluminium/85 truncate flex-1" title={recipe.repoPath}>
+                                {recipe.repoPath.split(/[/\\]/).pop()}
+                              </span>
+                            </div>
+                            <div className="flex items-center text-[10px] font-mono">
+                              <span className="text-aluminium/45 w-16 uppercase">Provider:</span>
+                              <span className="text-aluminium/85 truncate flex-1">{recipe.provider}</span>
+                            </div>
+                            <div className="flex items-center text-[10px] font-mono">
+                              <span className="text-aluminium/45 w-16 uppercase">Model:</span>
+                              <span className="text-aluminium/85 truncate flex-1">{recipe.model}</span>
+                            </div>
+                            {recipe.baseBranch && (
+                              <div className="flex items-center text-[10px] font-mono">
+                                <span className="text-aluminium/45 w-16 uppercase">Branch:</span>
+                                <span className="text-aluminium/85 truncate flex-1">{recipe.baseBranch}</span>
+                              </div>
+                            )}
+                            {recipe.budgetCap !== null && recipe.budgetCap !== undefined && (
+                              <div className="flex items-center text-[10px] font-mono">
+                                <span className="text-aluminium/45 w-16 uppercase">Budget:</span>
+                                <span className="text-aluminium/85 truncate flex-1">${recipe.budgetCap.toFixed(2)}</span>
+                              </div>
+                            )}
+                            <div className="flex items-start text-[10px] font-mono mt-1">
+                              <span className="text-aluminium/45 w-16 uppercase shrink-0">Prompt:</span>
+                              <span className="text-chalk/60 line-clamp-2 leading-relaxed flex-1 font-sans text-xs">
+                                {recipe.prompt}
+                              </span>
+                            </div>
+                          </div>
                         </div>
-                        <button className="px-4 py-1.5 rounded bg-carbon border border-aluminium/20 text-label text-chalk hover:shadow-active transition-taste">
-                          Load
-                        </button>
+
+                        <div className="flex gap-3 border-t border-aluminium/5 pt-3">
+                          <button
+                            onClick={() => handleOneClickRunRecipe(recipe)}
+                            className="flex-1 px-4 py-2 rounded bg-carbon border border-aluminium/20 text-label text-chalk font-semibold hover:shadow-active transition-taste text-xs text-center"
+                          >
+                            Run Recipe
+                          </button>
+                          <button
+                            onClick={() => handleLoadRecipe(recipe)}
+                            className="px-4 py-2 rounded bg-transparent border border-aluminium/15 text-label text-aluminium hover:text-chalk hover:border-aluminium/30 transition-taste text-xs"
+                          >
+                            Load into Form
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
-                </div>
-                <div className="flex gap-4 border-t border-aluminium/10 pt-6">
-                  <button className="px-6 py-2.5 rounded bg-carbon border border-aluminium/20 text-body text-chalk font-semibold hover:shadow-active transition-taste">
-                    Custom Recipe
-                  </button>
-                </div>
+                )}
               </div>
             )}
 
@@ -649,12 +907,12 @@ export default function App(): React.JSX.Element {
                         : undefined
                     }
                     worktreePath={
-                      selectedTaskRecord.task.outcome === null
+                      selectedTaskRecord.task.outcome !== 'kept' && selectedTaskRecord.task.outcome !== 'discarded'
                         ? selectedTaskRecord.task.worktreePath
                         : undefined
                     }
                     onFollowUp={
-                      selectedTaskRecord.task.status === 'completed' && selectedTaskRecord.task.outcome === null
+                      selectedTaskRecord.task.status === 'completed' && selectedTaskRecord.task.outcome !== 'kept' && selectedTaskRecord.task.outcome !== 'discarded'
                         ? async (prompt) => {
                             await window.murl.followUpTask(selectedTaskRecord.task.taskId, prompt);
                             // Refresh the record so the updated diff + events are shown
@@ -742,11 +1000,11 @@ export default function App(): React.JSX.Element {
                                 </span>
                                 {t.outcome && (
                                   <span className={`text-label text-[9px] px-1.5 py-0.5 rounded border font-mono select-none ${
-                                    t.outcome === 'kept'
+                                    t.outcome === 'kept' || t.outcome === 'pr-opened'
                                       ? 'border-aluminium/20 text-chalk bg-carbon/50 shadow-active'
                                       : 'border-transparent text-aluminium/55'
                                   }`}>
-                                    {t.outcome.toUpperCase()}
+                                    {t.outcome.replace('-', ' ').toUpperCase()}
                                   </span>
                                 )}
                               </div>
@@ -794,40 +1052,139 @@ export default function App(): React.JSX.Element {
                     <h2 className="text-title text-chalk mb-6 font-semibold">Configuration</h2>
                   </div>
 
-                  {/* API Key */}
-                  <div className="flex flex-col gap-2">
+                  {/* Providers List Section */}
+                  <div className="flex flex-col gap-4">
                     <div className="flex justify-between items-center">
-                      <label className="text-label text-aluminium">Together API Key</label>
-                      {apiKeyConfigured && (
-                        <div className="flex items-center gap-2 bg-well px-2.5 py-1 rounded border border-aluminium/10">
-                          <div className="w-2 h-2 rounded-full bg-chalk shadow-active animate-breath" />
-                          <span className="text-micro-dot font-semibold text-chalk tracking-wider">KEY PERSISTED</span>
-                        </div>
-                      )}
+                      <label className="text-label text-aluminium font-semibold">LLM Providers</label>
+                      <button
+                        onClick={() => {
+                          const newId = `custom-${Date.now()}`;
+                          setProviders(prev => [
+                            ...prev,
+                            { id: newId, name: 'Custom Provider', baseURL: 'https://api.example.com/v1' }
+                          ]);
+                        }}
+                        className="px-3 py-1 rounded bg-carbon border border-aluminium/15 text-xs text-chalk hover:bg-aluminium/5 transition-taste"
+                      >
+                        + Add Provider
+                      </button>
                     </div>
-                    <input
-                      type="password"
-                      value={apiKeyInput}
-                      onChange={(e) => setApiKeyInput(e.target.value)}
-                      placeholder={apiKeyConfigured ? '••••••••••••••••••••••••••••••••' : 'Enter Together API key'}
-                      className="bg-well border border-aluminium/20 rounded p-2.5 text-data text-chalk focus:border-chalk outline-none"
-                    />
-                    <span className="text-xs text-aluminium/60">
-                      {apiKeyConfigured
-                        ? 'A key is securely saved. Enter a new key to overwrite it.'
-                        : 'Provide your Together AI API key to enable remote LLM execution.'}
-                    </span>
+
+                    <div className="flex flex-col gap-4">
+                      {providers.map((p, idx) => {
+                        const isConfigured = !!configuredProviders[p.id];
+                        const keyInput = apiKeyInputs[p.id] || '';
+                        const isDefault = p.id === 'together' || p.id === 'openai';
+                        const tStatus = testStatuses[p.id] || 'idle';
+                        const tMsg = testMessages[p.id] || '';
+
+                        return (
+                          <div key={p.id} className="bg-well border border-aluminium/10 rounded p-4 flex flex-col gap-3">
+                            <div className="flex justify-between items-center">
+                              <span className="text-xs font-semibold text-chalk/70 tracking-wider">
+                                {isDefault ? `${p.name} (Built-in)` : 'Custom Provider'}
+                              </span>
+                              {!isDefault && (
+                                <button
+                                  onClick={() => {
+                                    setProviders(prev => prev.filter(prov => prov.id !== p.id));
+                                    setApiKeyInputs(prev => {
+                                      const next = { ...prev };
+                                      delete next[p.id];
+                                      return next;
+                                    });
+                                  }}
+                                  className="text-xs text-signal hover:underline"
+                                >
+                                  Remove
+                                </button>
+                              )}
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3">
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[10px] text-aluminium">Provider Name</label>
+                                <input
+                                  type="text"
+                                  value={p.name}
+                                  onChange={(e) => {
+                                    const newName = e.target.value;
+                                    setProviders(prev => prev.map((prov, i) => i === idx ? { ...prov, name: newName } : prov));
+                                  }}
+                                  disabled={isDefault}
+                                  className="bg-carbon border border-aluminium/20 rounded px-2.5 py-1.5 text-xs text-chalk focus:border-chalk outline-none disabled:opacity-60"
+                                />
+                              </div>
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[10px] text-aluminium">Base URL</label>
+                                <input
+                                  type="text"
+                                  value={p.baseURL}
+                                  onChange={(e) => {
+                                    const newURL = e.target.value;
+                                    setProviders(prev => prev.map((prov, i) => i === idx ? { ...prov, baseURL: newURL } : prov));
+                                  }}
+                                  disabled={isDefault}
+                                  className="bg-carbon border border-aluminium/20 rounded px-2.5 py-1.5 text-xs text-chalk focus:border-chalk outline-none disabled:opacity-60"
+                                />
+                              </div>
+                            </div>
+
+                            <div className="flex flex-col gap-1">
+                              <div className="flex justify-between items-center">
+                                <label className="text-[10px] text-aluminium">API Key</label>
+                                {isConfigured && (
+                                  <span className="text-[9px] text-chalk font-semibold tracking-wider bg-carbon px-1.5 py-0.5 rounded border border-aluminium/15">KEY PERSISTED</span>
+                                )}
+                              </div>
+                              <input
+                                type="password"
+                                value={keyInput}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setApiKeyInputs(prev => ({ ...prev, [p.id]: val }));
+                                }}
+                                placeholder={isConfigured ? '••••••••••••••••••••••••••••••••' : `Enter ${p.name} API key`}
+                                className="bg-carbon border border-aluminium/20 rounded px-2.5 py-1.5 text-xs text-chalk focus:border-chalk outline-none"
+                              />
+                            </div>
+
+                            <div className="flex items-center justify-between mt-1">
+                              <button
+                                onClick={() => handleTestConnection(p.id)}
+                                disabled={tStatus === 'testing'}
+                                className="px-3 py-1 rounded bg-carbon border border-aluminium/25 text-[10px] text-chalk hover:bg-aluminium/10 transition-taste disabled:opacity-50"
+                              >
+                                {tStatus === 'testing' ? 'Testing…' : 'Test Connection'}
+                              </button>
+
+                              {tStatus !== 'idle' && (
+                                <span className="text-[10px] truncate max-w-[280px]">
+                                  {tStatus === 'testing' && <span className="text-aluminium animate-breath">Connecting…</span>}
+                                  {tStatus === 'success' && <span className="text-chalk font-semibold">✓ Connected</span>}
+                                  {tStatus === 'error' && <span className="text-signal">✗ {tMsg || 'Failed'}</span>}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
 
-                  {/* Provider */}
+                  {/* Default launch provider */}
                   <div className="flex flex-col gap-2">
-                    <label className="text-label text-aluminium">Provider</label>
+                    <label className="text-label text-aluminium">Default Launch Provider</label>
                     <select
                       value={provider}
                       onChange={(e) => setProvider(e.target.value)}
                       className="bg-well border border-aluminium/20 rounded p-2.5 text-data text-chalk focus:border-chalk outline-none cursor-pointer"
                     >
-                      <option value="together">Together AI</option>
+                      {providers.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
                     </select>
                   </div>
 
@@ -913,6 +1270,19 @@ export default function App(): React.JSX.Element {
                       className="bg-well border border-aluminium/20 rounded p-2.5 text-data text-chalk focus:border-chalk outline-none"
                     />
                   </div>
+
+                  {/* Budget guard action */}
+                  <div className="flex flex-col gap-2">
+                    <label className="text-label text-aluminium">Budget Guard Action</label>
+                    <select
+                      value={budgetGuardAction}
+                      onChange={(e) => setBudgetGuardAction(e.target.value as 'warn' | 'halt')}
+                      className="bg-well border border-aluminium/20 rounded p-2.5 text-data text-chalk focus:border-chalk outline-none cursor-pointer"
+                    >
+                      <option value="warn">Warn</option>
+                      <option value="halt">Halt</option>
+                    </select>
+                  </div>
                 </div>
 
                 <div className="flex items-center justify-between border-t border-aluminium/10 pt-6 mt-6">
@@ -924,30 +1294,18 @@ export default function App(): React.JSX.Element {
                     >
                       {saveStatus === 'saving' ? 'Saving…' : 'Save Config'}
                     </button>
-                    <button
-                      onClick={handleTestConnection}
-                      disabled={testStatus === 'testing'}
-                      className="px-6 py-2.5 rounded bg-transparent border border-aluminium/15 text-body text-aluminium hover:text-chalk hover:border-aluminium/30 disabled:opacity-50 transition-taste"
-                    >
-                      {testStatus === 'testing' ? 'Testing…' : 'Test Connection'}
-                    </button>
                   </div>
 
-                  {(testStatus !== 'idle' || testMessage || saveStatus !== 'idle') && (
+                  {saveStatus !== 'idle' && (
                     <div className="flex items-center gap-3 bg-carbon/50 px-4 py-2 rounded border border-aluminium/10 max-w-sm">
                       <div className={`w-2.5 h-2.5 rounded-full transition-all duration-200 ${
-                        testStatus === 'testing' || saveStatus === 'saving'
+                        saveStatus === 'saving'
                           ? 'bg-aluminium animate-breath shadow-active'
-                          : testStatus === 'success' || saveStatus === 'success'
+                          : saveStatus === 'success'
                             ? 'bg-chalk shadow-active animate-breath'
-                            : testStatus === 'error' || saveStatus === 'error'
-                              ? 'bg-signal shadow-signal animate-pulse-signal'
-                              : 'bg-aluminium'
+                            : 'bg-signal shadow-signal animate-pulse-signal'
                       }`} />
                       <span className="text-data text-xs truncate max-w-[280px]">
-                        {testStatus === 'testing' && 'Connecting to API…'}
-                        {testStatus === 'success' && (testMessage || 'Connection successful')}
-                        {testStatus === 'error' && `Failed: ${testMessage}`}
                         {saveStatus === 'saving' && 'Persisting settings…'}
                         {saveStatus === 'success' && 'Settings saved successfully.'}
                         {saveStatus === 'error' && 'Failed to save settings.'}
@@ -975,6 +1333,60 @@ export default function App(): React.JSX.Element {
               )}
             </div>
           </footer>
+          {/* Save Recipe Modal Overlay */}
+          {showSaveRecipeModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+              <div className="bg-carbon border border-aluminium/20 w-[400px] rounded-lg p-6 flex flex-col gap-4 shadow-2xl">
+                <div>
+                  <h3 className="text-title text-chalk font-semibold mb-1">Save as Recipe</h3>
+                  <p className="text-xs text-aluminium/60">Convert this composed task into a reusable template.</p>
+                </div>
+                
+                <div className="flex flex-col gap-1.5 text-left">
+                  <label className="text-label text-aluminium text-xs">Recipe Name</label>
+                  <input
+                    type="text"
+                    value={recipeNameInput}
+                    onChange={(e) => setRecipeNameInput(e.target.value)}
+                    placeholder="e.g. Code Refactor"
+                    className="bg-well border border-aluminium/20 rounded p-2 text-data text-chalk focus:border-chalk outline-none"
+                    autoFocus
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1.5 text-left">
+                  <label className="text-label text-aluminium text-xs">Description (Optional)</label>
+                  <textarea
+                    value={recipeDescInput}
+                    onChange={(e) => setRecipeDescInput(e.target.value)}
+                    placeholder="e.g. Standard vitest tests setup or style refactoring"
+                    rows={3}
+                    className="bg-well border border-aluminium/20 rounded p-2 text-body text-chalk focus:border-chalk outline-none resize-none"
+                  />
+                </div>
+
+                <div className="flex gap-3 justify-end mt-2">
+                  <button
+                    onClick={() => {
+                      setShowSaveRecipeModal(false);
+                      setRecipeNameInput('');
+                      setRecipeDescInput('');
+                    }}
+                    className="px-4 py-2 rounded bg-transparent border border-aluminium/15 text-label text-aluminium hover:text-chalk hover:border-aluminium/30 transition-taste"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSaveRecipe}
+                    disabled={!recipeNameInput.trim()}
+                    className="px-4 py-2 rounded bg-carbon border border-aluminium/20 text-label text-chalk font-semibold hover:shadow-active disabled:opacity-40 disabled:cursor-not-allowed transition-taste"
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </section>
       </main>
     </div>

@@ -76,9 +76,12 @@ function GlyphCell({ task: t, index, tickNow, onInspect, onDismiss, onCancel }: 
   const isDone      = t.status === 'completed';
   const isFailed    = t.status === 'failed';
   const isCancelled = t.status === 'cancelled';
+  const isOverBudget = typeof t.costUsd === 'number' && typeof t.budgetCap === 'number' && t.costUsd > t.budgetCap;
 
   // Status dot classes — exact reuse of Phase 1.2 design system
-  const dotClass = isRunning
+  const dotClass = isOverBudget
+    ? 'bg-signal shadow-signal animate-pulse-signal'   // over-budget matches signal pulse
+    : isRunning
     ? 'bg-chalk shadow-active animate-breath'          // breathing white glow
     : isQueued
     ? 'bg-aluminium/30'                                // dim, static
@@ -91,16 +94,16 @@ function GlyphCell({ task: t, index, tickNow, onInspect, onDismiss, onCancel }: 
   // Cell border brightens slightly on hover
   const cellBorder = hovered
     ? 'border-aluminium/30'
+    : isOverBudget || isFailed
+    ? 'border-signal/20'
     : isRunning
     ? 'border-aluminium/15'
-    : isFailed
-    ? 'border-signal/20'
     : 'border-aluminium/8';
 
   // Subtle cell glow when active (running or just-done)
   const cellGlow = isRunning
     ? 'shadow-[0_0_32px_rgba(250,250,250,0.04)]'
-    : isFailed
+    : isOverBudget || isFailed
     ? 'shadow-[0_0_24px_rgba(215,25,33,0.08)]'
     : '';
 
@@ -139,14 +142,14 @@ function GlyphCell({ task: t, index, tickNow, onInspect, onDismiss, onCancel }: 
 
           {/* Task ID in micro-dot face */}
           <span className={`font-dot text-[8px] leading-none tracking-wider select-none ${
-            isFailed ? 'text-signal' : isRunning || isDone ? 'text-chalk/60' : 'text-aluminium/40'
+            isOverBudget || isFailed ? 'text-signal' : isRunning || isDone ? 'text-chalk/60' : 'text-aluminium/40'
           }`}>
             {shortId(t.taskId, index)}
           </span>
         </div>
 
         {/* Bottom: elapsed or outcome */}
-        <div className="w-full">
+        <div className="w-full text-left">
           {elapsed && (
             <span className="font-dot text-[7px] text-chalk/50 leading-none block tabular-nums">
               {elapsed}
@@ -154,7 +157,7 @@ function GlyphCell({ task: t, index, tickNow, onInspect, onDismiss, onCancel }: 
           )}
           {isDone && !elapsed && (
             <span className="font-dot text-[7px] text-chalk/40 leading-none block">
-              {t.outcome ? t.outcome.toUpperCase() : 'DONE'}
+              {t.outcome ? t.outcome.replace('-', ' ').toUpperCase() : 'DONE'}
             </span>
           )}
           {isFailed && (
@@ -170,6 +173,11 @@ function GlyphCell({ task: t, index, tickNow, onInspect, onDismiss, onCancel }: 
           {isQueued && (
             <span className="font-dot text-[7px] text-aluminium/30 leading-none block">
               {t.queuePosition !== undefined ? `Q·${t.queuePosition + 1}` : 'Q'}
+            </span>
+          )}
+          {typeof t.costUsd === 'number' && (
+            <span className={`font-dot text-[7px] leading-none block mt-0.5 ${isOverBudget ? 'text-signal font-bold' : 'text-aluminium/50'}`}>
+              ${t.costUsd.toFixed(2)}
             </span>
           )}
         </div>
@@ -207,7 +215,7 @@ function GlyphCell({ task: t, index, tickNow, onInspect, onDismiss, onCancel }: 
             )}
             {t.outcome && (
               <span className="font-dot text-[9px] leading-none text-chalk/50">
-                {t.outcome.toUpperCase()}
+                {t.outcome.replace('-', ' ').toUpperCase()}
               </span>
             )}
           </div>
@@ -216,6 +224,20 @@ function GlyphCell({ task: t, index, tickNow, onInspect, onDismiss, onCancel }: 
           <p className="font-mono text-[10px] leading-snug text-chalk/70 break-words">
             {promptPreview}
           </p>
+
+          {/* Cost display */}
+          {typeof t.costUsd === 'number' && (
+            <p className="font-mono text-[9px] leading-none mt-1">
+              <span className={isOverBudget ? 'text-signal font-bold' : 'text-aluminium/60'}>
+                Cost: ${t.costUsd.toFixed(4)}
+              </span>
+              {t.budgetCap && (
+                <span className="text-aluminium/40">
+                  {' '}/ Cap: ${t.budgetCap.toFixed(2)}
+                </span>
+              )}
+            </p>
+          )}
 
           {/* Repo + branch */}
           <p className="font-mono text-[9px] leading-none text-aluminium/50 truncate">

@@ -226,4 +226,39 @@ describe('TaskStore', () => {
       store2.close();
     }
   });
+
+  it('should create, list, and delete recipes correctly', () => {
+    const recipeInput = {
+      name: 'Test Recipe',
+      description: 'A test description',
+      repoPath: '/path/to/repo',
+      prompt: 'Test prompt content',
+      model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo',
+      provider: 'together',
+      baseBranch: 'main',
+      budgetCap: 0.15,
+    };
+
+    const created = store.createRecipe(recipeInput);
+    expect(created.id).toBeDefined();
+    expect(created.name).toBe(recipeInput.name);
+    expect(created.description).toBe(recipeInput.description);
+    expect(created.repoPath).toBe(recipeInput.repoPath);
+    expect(created.prompt).toBe(recipeInput.prompt);
+    expect(created.model).toBe(recipeInput.model);
+    expect(created.provider).toBe(recipeInput.provider);
+    expect(created.baseBranch).toBe(recipeInput.baseBranch);
+    expect(created.budgetCap).toBe(recipeInput.budgetCap);
+
+    let recipes = store.listRecipes();
+    expect(recipes.length).toBe(1);
+    expect(recipes[0].id).toBe(created.id);
+    expect(recipes[0].name).toBe(recipeInput.name);
+
+    // Delete the recipe
+    store.deleteRecipe(created.id);
+    recipes = store.listRecipes();
+    expect(recipes.length).toBe(0);
+  });
 });
+
