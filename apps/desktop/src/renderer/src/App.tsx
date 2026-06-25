@@ -69,6 +69,9 @@ export default function App(): React.JSX.Element {
   const [newBakeOffProvider, setNewBakeOffProvider] = useState<string>('together');
   const [newBakeOffModel, setNewBakeOffModel] = useState<string>('meta-llama/Llama-3.3-70B-Instruct-Turbo');
 
+  // Custom Window chrome maximized state
+  const [isMaximized, setIsMaximized] = useState<boolean>(false);
+
   // Dashboard / grid state
   const [taskHistory, setTaskHistory] = useState<PersistedTask[]>([]);
   const [dismissedTaskIds, setDismissedTaskIds] = useState<Set<string>>(new Set());
@@ -157,6 +160,18 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     const id = setInterval(() => setTickNow(Date.now()), 1000);
     return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    const checkMaximized = async () => {
+      try {
+        const max = await window.murl.isWindowMaximized();
+        setIsMaximized(max);
+      } catch {}
+    };
+    window.addEventListener('resize', checkMaximized);
+    checkMaximized();
+    return () => window.removeEventListener('resize', checkMaximized);
   }, []);
 
   // ─── Push-event subscriptions (all tasks, not just one) ─────────────────────
@@ -677,11 +692,62 @@ export default function App(): React.JSX.Element {
 
   // ─── Render ─────────────────────────────────────────────────────────────────
 
-  return (
-    <div className="w-screen h-screen bg-ink bg-dotgrid bg-[size:8px_8px] text-chalk flex flex-col select-none overflow-hidden p-6">
+  const isMac = window.murl.platform === 'darwin';
 
-      {/* Header */}
-      <header className="flex items-center justify-between h-8 border-b border-aluminium/10 pb-4">
+  return (
+    <div className="w-screen h-screen bg-ink bg-dotgrid bg-[size:8px_8px] text-chalk flex flex-col select-none overflow-hidden">
+      {/* Custom Title Bar */}
+      <div
+        className="h-10 flex items-center justify-between bg-carbon border-b border-aluminium/10 select-none shrink-0 px-4"
+        style={{ WebkitAppRegion: 'drag' } as any}
+      >
+        <div className="flex items-center gap-2">
+          {/* Mac traffic light offset */}
+          <span className={`font-dot text-[10px] text-chalk/50 tracking-widest ${isMac ? 'pl-20' : ''}`}>
+            MURL
+          </span>
+        </div>
+        <div className="text-[10px] font-mono text-aluminium/60 truncate max-w-xs md:max-w-md select-none">
+          {activeRepo ? activeRepo.displayName : 'No repository active'}
+        </div>
+
+        {/* Window Controls (Windows/Linux only; hidden on Darwin) */}
+        {!isMac ? (
+          <div className="flex items-center gap-1" style={{ WebkitAppRegion: 'no-drag' } as any}>
+            <button
+              onClick={() => window.murl.minimizeWindow()}
+              className="w-8 h-8 rounded flex items-center justify-center hover:bg-aluminium/10 text-aluminium hover:text-chalk transition-taste cursor-pointer"
+              title="Minimize"
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            </button>
+            <button
+              onClick={() => window.murl.maximizeWindow()}
+              className="w-8 h-8 rounded flex items-center justify-center hover:bg-aluminium/10 text-aluminium hover:text-chalk transition-taste cursor-pointer"
+              title={isMaximized ? 'Restore' : 'Maximize'}
+            >
+              {isMaximized ? (
+                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect></svg>
+              ) : (
+                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect></svg>
+              )}
+            </button>
+            <button
+              onClick={() => window.murl.closeWindow()}
+              className="w-8 h-8 rounded flex items-center justify-center hover:bg-signal/20 text-aluminium hover:text-signal transition-taste cursor-pointer"
+              title="Close"
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+          </div>
+        ) : (
+          <div className="w-[72px]" />
+        )}
+      </div>
+
+      <div className="flex-1 flex flex-col overflow-hidden p-6 pt-4">
+        {/* Header */}
+        <header className="flex items-center justify-between h-8 border-b border-aluminium/10 pb-4">
         <div className="text-display-dot font-dot tracking-wider text-chalk select-none">
           MURL
         </div>
@@ -1687,6 +1753,7 @@ export default function App(): React.JSX.Element {
           )}
         </section>
       </main>
+      </div>
     </div>
   );
 }

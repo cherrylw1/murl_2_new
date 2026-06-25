@@ -71,10 +71,16 @@ function createTray(): void {
 }
 
 function createWindow(): void {
+  const isMac = process.platform === 'darwin';
+
   mainWindow = new BrowserWindow({
     width: 900,
     height: 670,
-    backgroundColor: '#0A0A0A',
+    backgroundColor: isMac ? undefined : '#0A0A0A',
+    transparent: isMac,
+    frame: isMac, // macOS uses titleBarStyle to render traffic lights inside custom chrome
+    titleBarStyle: isMac ? 'hidden' : undefined,
+    vibrancy: isMac ? 'under-window' : undefined,
     show: false,
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
@@ -278,6 +284,28 @@ ipcMain.handle('murl:launchTask', async (_event, repoPath: string, prompt: strin
 ipcMain.handle('murl:getTasksByGroupId', async (_event, groupId: string) => {
   if (!taskRunner) throw new Error('TaskRunner not initialized.');
   return taskRunner.getTasksByGroupId(groupId);
+});
+
+ipcMain.handle('murl:window-minimize', () => {
+  mainWindow?.minimize();
+});
+
+ipcMain.handle('murl:window-maximize', () => {
+  if (mainWindow) {
+    if (mainWindow.isMaximized()) {
+      mainWindow.unmaximize();
+    } else {
+      mainWindow.maximize();
+    }
+  }
+});
+
+ipcMain.handle('murl:window-close', () => {
+  mainWindow?.close();
+});
+
+ipcMain.handle('murl:window-is-maximized', () => {
+  return mainWindow ? mainWindow.isMaximized() : false;
 });
 
 ipcMain.handle('murl:keepTask', async (_event, taskId: string) => {

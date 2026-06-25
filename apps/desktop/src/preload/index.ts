@@ -125,6 +125,12 @@ const murlApi: MurlApi = {
   offPreviewUrl:   (cb) => previewUrlBridge.off(cb as AnyFn),
   onPreviewExit:   (cb) => previewExitBridge.on(cb as AnyFn),
   offPreviewExit:  (cb) => previewExitBridge.off(cb as AnyFn),
+
+  platform: process.platform,
+  minimizeWindow: () => ipcRenderer.invoke('murl:window-minimize'),
+  maximizeWindow: () => ipcRenderer.invoke('murl:window-maximize'),
+  closeWindow: () => ipcRenderer.invoke('murl:window-close'),
+  isWindowMaximized: () => ipcRenderer.invoke('murl:window-is-maximized'),
 };
 
 contextBridge.exposeInMainWorld('murl', murlApi);

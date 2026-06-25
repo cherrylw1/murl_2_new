@@ -240,4 +240,10 @@ export interface MurlApi {
   offPreviewUrl(cb: (payload: PreviewUrlPayload) => void): void;
   onPreviewExit(cb: (payload: PreviewExitPayload) => void): void;
   offPreviewExit(cb: (payload: PreviewExitPayload) => void): void;
+
+  platform: string;
+  minimizeWindow(): Promise<void>;
+  maximizeWindow(): Promise<void>;
+  closeWindow(): Promise<void>;
+  isWindowMaximized(): Promise<boolean>;
 }
