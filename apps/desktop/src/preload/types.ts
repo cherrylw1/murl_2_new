@@ -105,6 +105,21 @@ export interface TerminalExitPayload {
   exitCode: number;
 }
 
+export interface PreviewLogPayload {
+  taskId: string;
+  line: string;
+}
+
+export interface PreviewUrlPayload {
+  taskId: string;
+  url: string;
+}
+
+export interface PreviewExitPayload {
+  taskId: string;
+  code: number | null;
+}
+
 // ─── Full window.murl API surface ─────────────────────────────────────────────
 
 export interface MurlApi {
@@ -164,4 +179,18 @@ export interface MurlApi {
   offTerminalData(cb: (payload: TerminalDataPayload) => void): void;
   onTerminalExit(cb: (payload: TerminalExitPayload) => void): void;
   offTerminalExit(cb: (payload: TerminalExitPayload) => void): void;
+
+  // Preview (dev server)
+  getPreviewCommand(worktreePath: string): Promise<string | null>;
+  startPreview(taskId: string, worktreePath: string, command: string): Promise<void>;
+  stopPreview(taskId: string): Promise<void>;
+  openPreviewUrl(url: string): Promise<void>;
+
+  // Preview push events
+  onPreviewLog(cb: (payload: PreviewLogPayload) => void): void;
+  offPreviewLog(cb: (payload: PreviewLogPayload) => void): void;
+  onPreviewUrl(cb: (payload: PreviewUrlPayload) => void): void;
+  offPreviewUrl(cb: (payload: PreviewUrlPayload) => void): void;
+  onPreviewExit(cb: (payload: PreviewExitPayload) => void): void;
+  offPreviewExit(cb: (payload: PreviewExitPayload) => void): void;
 }

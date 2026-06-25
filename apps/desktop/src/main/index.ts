@@ -16,6 +16,7 @@ import {
 } from './settings.js';
 import { TaskRunner } from './task-runner.js';
 import { TerminalManager } from './terminal-manager.js';
+import { PreviewManager } from './preview-manager.js';
 
 const execAsync = promisify(exec);
 
@@ -24,6 +25,7 @@ let tray: Tray | null = null;
 let isQuitting = false;
 let taskRunner: TaskRunner | null = null;
 let terminalManager: TerminalManager | null = null;
+let previewManager: PreviewManager | null = null;
 
 function createDefaultMenu(): void {
   Menu.setApplicationMenu(null);
@@ -256,15 +258,17 @@ ipcMain.handle('murl:launchTask', async (_event, repoPath: string, prompt: strin
 
 ipcMain.handle('murl:keepTask', async (_event, taskId: string) => {
   if (!taskRunner) throw new Error('TaskRunner not initialized.');
-  // Close any open terminal for this task before removing its worktree
+  // Close any open terminal or preview for this task before removing its worktree
   terminalManager?.close(taskId);
+  previewManager?.stop(taskId);
   return taskRunner.keep(taskId);
 });
 
 ipcMain.handle('murl:discardTask', async (_event, taskId: string) => {
   if (!taskRunner) throw new Error('TaskRunner not initialized.');
-  // Close any open terminal for this task before removing its worktree
+  // Close any open terminal or preview for this task before removing its worktree
   terminalManager?.close(taskId);
+  previewManager?.stop(taskId);
   return taskRunner.discard(taskId);
 });
 
@@ -298,6 +302,7 @@ app.whenReady().then(() => {
   const dbPath = join(app.getPath('userData'), 'murl-tasks.db');
   taskRunner = new TaskRunner(dbPath);
   terminalManager = new TerminalManager();
+  previewManager = new PreviewManager();
 
   createDefaultMenu();
   createTray();
@@ -317,8 +322,9 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
-  // Clean up all PTY processes before quitting — no leaked shell processes
+  // Clean up all PTY processes and preview servers before quitting
   terminalManager?.closeAll();
+  previewManager?.stopAll();
 });
 
 // ── Terminal IPC handlers ────────────────────────────────────────────────────
@@ -360,3 +366,47 @@ ipcMain.handle('murl:terminalResize', async (_event, taskId: string, cols: numbe
 ipcMain.handle('murl:closeTerminal', async (_event, taskId: string) => {
   terminalManager?.close(taskId);
 });
+
+// ── Preview IPC handlers ─────────────────────────────────────────────────────
+
+/** Read package.json and return a suggested dev command. Does NOT run anything. */
+ipcMain.handle('murl:getPreviewCommand', async (_event, worktreePath: string) => {
+  if (!previewManager) throw new Error('PreviewManager not initialized.');
+  return previewManager.getSuggestedCommand(worktreePath);
+});
+
+/** Start the dev server for a task. The user must have confirmed the command. */
+ipcMain.handle('murl:startPreview', async (_event, taskId: string, worktreePath: string, command: string) => {
+  if (!previewManager) throw new Error('PreviewManager not initialized.');
+  if (!mainWindow) throw new Error('Main window not available.');
+
+  const push = (channel: string, payload: unknown) => {
+    try {
+      if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+        mainWindow.webContents.send(channel, payload);
+      }
+    } catch { /* renderer closed */ }
+  };
+
+  // start() enforces worktree existence — throws clearly if the worktree is gone
+  previewManager.start(
+    taskId,
+    worktreePath,
+    command,
+    (line: string) => push('murl:preview-log', { taskId, line }),
+    (url: string) => push('murl:preview-url', { taskId, url }),
+    (code: number | null) => push('murl:preview-exit', { taskId, code })
+  );
+});
+
+/** Stop the running dev server for a task. */
+ipcMain.handle('murl:stopPreview', async (_event, taskId: string) => {
+  previewManager?.stop(taskId);
+});
+
+/** Open the detected preview URL in the default system browser. */
+ipcMain.handle('murl:openPreviewUrl', async (_event, url: string) => {
+  const { shell } = await import('electron');
+  await shell.openExternal(url);
+});
+

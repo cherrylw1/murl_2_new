@@ -3,6 +3,7 @@ import { MurlEvent, PersistedTask } from '../../preload/types.js';
 import { parseGitDiff, ParsedFileDiff } from './diff-parser.js';
 import Prism from 'prismjs';
 import TerminalPane from './TerminalPane.js';
+import PreviewPane from './PreviewPane.js';
 
 // Import languages for syntax highlighting
 import 'prismjs/components/prism-javascript.js';
@@ -165,7 +166,7 @@ export default function ThreePaneTaskDetail({
   const [parsedFiles, setParsedFiles] = useState<ParsedFileDiff[]>([]);
   const [selectedFile, setSelectedFile] = useState<string>('');
   const eventLogBottomRef = useRef<HTMLDivElement>(null);
-  const [centerTab, setCenterTab] = useState<'diff' | 'terminal'>('diff');
+  const [centerTab, setCenterTab] = useState<'diff' | 'terminal' | 'preview'>('diff');
 
   const [outcome, setOutcome] = useState<'kept' | 'discarded' | null>((task.outcome as any) || null);
   const [outcomeError, setOutcomeError] = useState<string | null>(null);
@@ -484,6 +485,18 @@ export default function ThreePaneTaskDetail({
                   TERMINAL
                 </button>
               )}
+              {worktreePath && (
+                <button
+                  onClick={() => setCenterTab('preview')}
+                  className={`text-[10px] tracking-wider font-semibold px-2.5 py-1.5 rounded transition-taste select-none ${
+                    centerTab === 'preview'
+                      ? 'bg-carbon/80 text-chalk border border-aluminium/15'
+                      : 'text-aluminium/40 hover:text-aluminium/70 border border-transparent'
+                  }`}
+                >
+                  PREVIEW
+                </button>
+              )}
             </div>
             {centerTab === 'diff' && activeFile && (
               <span className="text-[9px] text-aluminium/40 font-mono uppercase bg-carbon/50 px-1.5 py-0.5 rounded border border-aluminium/10">
@@ -495,6 +508,10 @@ export default function ThreePaneTaskDetail({
           {centerTab === 'terminal' && worktreePath ? (
             <div className="flex-1 min-h-0 p-3 flex flex-col overflow-hidden">
               <TerminalPane taskId={task.taskId!} worktreePath={worktreePath} />
+            </div>
+          ) : centerTab === 'preview' && worktreePath ? (
+            <div className="flex-1 min-h-0 p-3 flex flex-col overflow-hidden">
+              <PreviewPane taskId={task.taskId!} worktreePath={worktreePath} />
             </div>
           ) : (
           <div className="flex-1 min-h-0 p-4 bg-well border border-aluminium/20 rounded-lg overflow-hidden flex flex-col m-3 mt-2">

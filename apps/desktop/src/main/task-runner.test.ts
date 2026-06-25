@@ -60,12 +60,19 @@ describe('TaskRunner Keep Safety tests', () => {
       });
     });
 
-    // Cleanup any leftovers and recreate fresh folders
+    // Cleanup any leftovers and recreate fresh folders (retry for Windows git locks)
     if (fs.existsSync(scratchDir)) {
-      try {
-        fs.rmSync(scratchDir, { recursive: true, force: true });
-      } catch (err) {
-        console.warn('Initial cleanup warning:', err);
+      for (let attempt = 0; attempt < 5; attempt++) {
+        try {
+          fs.rmSync(scratchDir, { recursive: true, force: true });
+          break;
+        } catch (err) {
+          if (attempt < 4) {
+            await new Promise((r) => setTimeout(r, 50 * (2 ** attempt)));
+          } else {
+            console.warn('Initial cleanup warning:', err);
+          }
+        }
       }
     }
     fs.mkdirSync(baseRepoPath, { recursive: true });
@@ -101,8 +108,8 @@ describe('TaskRunner Keep Safety tests', () => {
       } catch {}
     }
 
-    // 3. Give any pending async operations and cancellations a brief moment to yield and finish
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    // 3. Give git processes extra time to release file locks (Windows needs more)
+    await new Promise((resolve) => setTimeout(resolve, 600));
 
     // 4. Close all database connections first to release file locks on Windows
     for (const runner of runners) {
@@ -111,22 +118,25 @@ describe('TaskRunner Keep Safety tests', () => {
       } catch {}
     }
 
-    // 5. Cleanup files
-    if (fs.existsSync(scratchDir)) {
-      try {
-        fs.rmSync(scratchDir, { recursive: true, force: true });
-      } catch (err) {
-        console.warn('Cleanup warning:', err);
+    // 5. Cleanup files — retry with backoff since Windows git holds locks briefly
+    const forceRmSync = async (dir: string, label: string) => {
+      for (let attempt = 0; attempt < 5; attempt++) {
+        if (!fs.existsSync(dir)) return;
+        try {
+          fs.rmSync(dir, { recursive: true, force: true });
+          return;
+        } catch (err) {
+          if (attempt < 4) {
+            // Wait longer each retry (50ms, 150ms, 350ms, 750ms)
+            await new Promise((r) => setTimeout(r, 50 * (2 ** attempt)));
+          } else {
+            console.warn(`Cleanup warning (${label}):`, err);
+          }
+        }
       }
-    }
-    const userdataDir = path.resolve('./scratch/test-userdata');
-    if (fs.existsSync(userdataDir)) {
-      try {
-        fs.rmSync(userdataDir, { recursive: true, force: true });
-      } catch (err) {
-        console.warn('Userdata cleanup warning:', err);
-      }
-    }
+    };
+    await forceRmSync(scratchDir, 'scratchDir');
+    await forceRmSync(path.resolve('./scratch/test-userdata'), 'userdataDir');
   });
 
   async function waitForTaskCompletion(runner: TaskRunner, taskId: string): Promise<void> {

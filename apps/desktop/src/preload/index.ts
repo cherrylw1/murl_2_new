@@ -8,6 +8,9 @@ import {
   TaskCancelledPayload,
   TerminalDataPayload,
   TerminalExitPayload,
+  PreviewLogPayload,
+  PreviewUrlPayload,
+  PreviewExitPayload,
 } from './types.js';
 
 // ─── Push-listener wrapper maps ───────────────────────────────────────────────
@@ -40,6 +43,9 @@ const taskFailedBridge   = makePushBridge('murl:task-failed');
 const taskCancelledBridge = makePushBridge('murl:task-cancelled');
 const terminalDataBridge = makePushBridge('murl:terminal-data');
 const terminalExitBridge = makePushBridge('murl:terminal-exit');
+const previewLogBridge   = makePushBridge('murl:preview-log');
+const previewUrlBridge   = makePushBridge('murl:preview-url');
+const previewExitBridge  = makePushBridge('murl:preview-exit');
 
 // ─── Full API exposed to renderer ─────────────────────────────────────────────
 
@@ -95,6 +101,21 @@ const murlApi: MurlApi = {
   offTerminalData: (cb) => terminalDataBridge.off(cb as AnyFn),
   onTerminalExit:  (cb) => terminalExitBridge.on(cb as AnyFn),
   offTerminalExit: (cb) => terminalExitBridge.off(cb as AnyFn),
+
+  // Preview (dev server)
+  getPreviewCommand: (worktreePath: string) => ipcRenderer.invoke('murl:getPreviewCommand', worktreePath),
+  startPreview: (taskId: string, worktreePath: string, command: string) =>
+    ipcRenderer.invoke('murl:startPreview', taskId, worktreePath, command),
+  stopPreview: (taskId: string) => ipcRenderer.invoke('murl:stopPreview', taskId),
+  openPreviewUrl: (url: string) => ipcRenderer.invoke('murl:openPreviewUrl', url),
+
+  // Preview push events
+  onPreviewLog:    (cb) => previewLogBridge.on(cb as AnyFn),
+  offPreviewLog:   (cb) => previewLogBridge.off(cb as AnyFn),
+  onPreviewUrl:    (cb) => previewUrlBridge.on(cb as AnyFn),
+  offPreviewUrl:   (cb) => previewUrlBridge.off(cb as AnyFn),
+  onPreviewExit:   (cb) => previewExitBridge.on(cb as AnyFn),
+  offPreviewExit:  (cb) => previewExitBridge.off(cb as AnyFn),
 };
 
 contextBridge.exposeInMainWorld('murl', murlApi);
